@@ -1,0 +1,15 @@
+.pytest_cache
+.vscode/
+__pycache__/
+data/
+mlruns/
+latex_plots/
+logs/
+models/
+notebooks/
+tests/
+.Rproj.user
+
+# pixi environments
+.pixi
+*.egg-info

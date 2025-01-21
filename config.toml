@@ -1,0 +1,51 @@
+[params]
+project_dir = "./bottom_up_alignment"
+save_dir = "" # specify
+steel_db = "./steel_sector.db"
+scenario = "iea"
+scenario_level = "region"
+model_name = "BU_single_OLS"
+EAF_decarb = true
+
+[historical_data]
+version_year = 2023
+asset_level_data = "Global-Steel-Plant-Tracker-2023-03-2.xlsx"
+missing_years = "filled_missing_start_years.xlsx"
+
+[historical_data.top_down]
+refinitiv = "" # specify
+cdp = "" # specify
+
+[historical_data.macro]
+iea_prod = "production/WEO_2023"
+oecd_capa = "capacity/STI_STEEL_MAKINGCAPACITY_08092023132636861.csv"
+wsa_prod = "" # specify
+carbon_price = "" # specify
+
+[historical_data.micro]
+company_prod = "production/company_steel_production.xlsx"
+
+[emission_factors]
+wsa = "emission_factors/EF_WSA.xlsx"
+jrc = "emission_factors/EF_JRC_22.xlsx"
+sci = "emission_factors/EF_SCI_22.xlsx"
+energy_mix = "energy_mix/global_energy_mix_2023.csv" 
+
+[mappings]
+gspt2gspt = "mappings/GSPT2GSPT.json"
+gspt2iea_countries = "mappings/GSPT2IEA_countries.json"
+refi2gspt = "mappings/REFINEW2GSPT23_mapping.xlsx"
+gspt2cdp = "mappings/GSPT2CDP_mapping.xlsx"
+parent_group_map = "mappings/parent_group_map.json"
+EU_27 = "mappings/EU_27.xlsx"
+
+
+[scenarios]
+iea_world = "scenario/WEO2023_extended/WEO2023_Extended_Data_World.csv"
+iea_regions = "scenario/WEO2023_extended/WEO2023_Extended_Data_Regions.csv"
+
+[projected_data.electricity]
+elec_int_nze = "environmental_indicators/intensity/elec_intensity_NZE.xlsx"
+elec_int_steps = "environmental_indicators/intensity/elec_intensity_STEPS.xlsx"
+elec_int_aps = "environmental_indicators/intensity/elec_intensity_APS.xlsx"
+
