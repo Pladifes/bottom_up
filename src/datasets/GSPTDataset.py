@@ -29,7 +29,7 @@ class GSPTDataset:
         self.gspt2gspt_path = gspt2gspt_path
         with open(parent_group_map_path, "r") as f:
             self.parent_group_map = json.load(f)
-        self.raw_data = pd.read_excel(data_path, sheet_name=['Steel Plants', 'Yearly Production', "Metadata"])
+        self.raw_data = pd.read_excel(data_path, sheet_name=['Steel Plants', 'Yearly Production', "Metadata"], engine="calamine")
         self.steel_plants = self.raw_data["Steel Plants"]
 
     def get_projected_data(self, parent_group_map_path, wsa_ef_path):
@@ -58,7 +58,7 @@ class GSPTDataset:
         ur_df.reset_index(inplace=True)
         
         # get EF
-        EF = pd.read_excel(wsa_ef_path)
+        EF = pd.read_excel(wsa_ef_path, engine="calamine")
         EF.rename(columns={"Technology": "Main production process"}, inplace=True)
         
         # get operating plants between 2022 and 2030
@@ -658,7 +658,7 @@ class GSPTDataset:
         
         # Some plants have an operating status without a start year,
         # add that start year in order to include them in analysis
-        missing_years = pd.read_excel(self.missing_years_path)
+        missing_years = pd.read_excel(self.missing_years_path, engine="calamine")
         
         # The 2022 and 2023 share the same plant IDS so this should work
         steel_df = pd.merge(steel_df, 

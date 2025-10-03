@@ -32,7 +32,7 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
     
     params = config_file.params
     # Specify save path
-    save_dir = Path(config_file["save_dir"])
+    save_dir = params.save_dir
     save_file = save_dir / "BU_results"
     save_file.mkdir(parents=True, exist_ok=True) 
     typer.echo(f"Saving results to {save_file}")
@@ -91,6 +91,7 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
                     jrc_22_path=raw_data_dir / emission_factors.jrc,
                     sci_path=raw_data_dir / emission_factors.sci,
                     EU_27_path=raw_data_dir / mappings.EU_27,
+                    huizhong_path=raw_data_dir / emission_factors.huizhong,
                     )
     with open(gspt2gspt_path, "r") as f:
         gspt2gspt_map = json.load(f)
@@ -375,7 +376,7 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
                                     EAF_decarb=params.EAF_decarb)
     
     fig_hor_resc_name_pdf = plots_dir/ f"rel_sectoral_proj_{params.scenario_level}_{params.model_name}_decarb_horizontal.pdf"
-    fig_hor_rescaled.savefig(plots_dir / fig_hor_resc_name_pdf, dpi=600, bbox_inches="tight")
+    fig_hor_rescaled.savefig(fig_hor_resc_name_pdf, dpi=600, bbox_inches="tight")
     # Save bottom-up projections plots
     save_plots(fig_vert=fig_vert, fig_hor=fig_hor, fig_prod=fig_prod, plots_dir=plots_dir, EAF_decarb=params.EAF_decarb, iea_level=params.scenario_level, model_name=params.model_name)
 

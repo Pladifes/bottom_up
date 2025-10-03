@@ -163,7 +163,7 @@ def get_ghg_trajectory_plot(gspt: GSPTDataset,
                          bbox=dict(facecolor='lightgray', edgecolor='black', boxstyle='round,pad=0.5'))
         
         # TODO:
-        cbudget = pd.read_excel(Path("./bottom_up_alignment/src/projections_") /f"proj_country_prod_{scenario.lower()}.xlsx")
+        cbudget = pd.read_excel(Path("./src/projections_") /f"proj_country_prod_{scenario.lower()}.xlsx")
               
         # carbon price changes (~/2 for emergent countries)
         proj_costs = proj_costs_iea[scenario]
@@ -654,8 +654,9 @@ def get_proj_BU_carbon_impact(gspt: "GSPTDataset",
     # country-level emission factors
     final_plants = EF.match_emissions_factors(final_plants, 
                             level="country", 
-                            source="sci", 
-                            techno_col="Main production process") 
+                            source="huizhong", # TODO: old sci
+                            techno_col="Main production process",
+                            proj=True) 
     final_plants['Estimated crude steel production (ttpa)'] = final_plants["Nominal crude steel capacity (ttpa)"]
     final_plants['Emissions (Gt)'] = final_plants['Estimated crude steel production (ttpa)'] * final_plants['EF'] / 1e6
     
@@ -1024,7 +1025,8 @@ def get_proj_BU_constant_ms(gspt: pd.DataFrame,
     proj_plants_prod = EF.match_emissions_factors(plants=proj_plants_prod, 
                                                   techno_col=techno_col,
                                                   level="country",
-                                                  source='sci')
+                                                  source='huizhong',
+                                                  proj=True) # TODO: old sci
     # Share of plant-level emissions attributed to owner with respect to their stake in the plant
     proj_plants_prod['Estimated emissions (ttpa)'] = proj_plants_prod["Estimated crude steel production (ttpa)"] * proj_plants_prod['EF'] 
     
@@ -1109,8 +1111,9 @@ def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, pare
     # impute emission factors
     mergedf = EF.match_emissions_factors(mergedf, 
                                 level="country", 
-                                source="sci", 
-                                techno_col="Main production process")  
+                                source="huizhong", # TODO: change for huizhong?
+                                techno_col="Main production process",
+                                proj=True)  
     
     mergedf['Estimated crude steel production (ttpa)'] = mergedf["Nominal crude steel capacity (ttpa)"] * mergedf["UR crude steel"]
 

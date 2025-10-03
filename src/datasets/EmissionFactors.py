@@ -10,7 +10,8 @@ class EmissionFactors:
                  wsa_path: Path, 
                  jrc_22_path: Path,
                  sci_path: Path,
-                 EU_27_path: Path
+                 EU_27_path: Path,
+                 huizhong_path: Path
                  ) -> None:
         """Initalise constructor.
 
@@ -23,9 +24,10 @@ class EmissionFactors:
         self.jrc_22_path = jrc_22_path
         self.sci_path = sci_path
         self.EU_27_path = EU_27_path
+        self.huizhong_path = huizhong_path
 
         
-    def match_emissions_factors(self, plants: pd.DataFrame, level: str,  source: str, techno_col: str = None):
+    def match_emissions_factors(self, plants: pd.DataFrame, level: str,  source: str, techno_col: str = None, proj: bool = False):
         """Given a plants dataset with Country and Technology columns, match available emissions factors.
 
         Args:
@@ -41,8 +43,9 @@ class EmissionFactors:
         wsa_ef = self.read_wsa()
         jrc_ef = self.read_jrc_22()
         sci_ef = self.read_sci()
+        huizhong_ef = self.read_huizhong()
         
-        efs = {"wsa": wsa_ef, "jrc": jrc_ef, "sci": sci_ef}
+        efs = {"wsa": wsa_ef, "jrc": jrc_ef, "sci": sci_ef, "huizhong": huizhong_ef}
         if level == "global":
             plants = pd.merge(plants,
                                 wsa_ef, 
@@ -50,7 +53,18 @@ class EmissionFactors:
                                 on=techno_col)
             plants.rename(columns={"WSA_EF": "EF"}, inplace=True)
         elif level == "country":
-            plants = self.map_national_ef(plants=plants, efs=efs, source=source, techno_col=techno_col)
+            if not proj:
+                plants = self.map_national_ef(plants=plants, efs=efs, source=source, techno_col=techno_col)
+
+            else:
+                assert source == "huizhong"
+                # Include projected efs from huizhong for BF-BOF
+                plants = self.map_national_ef(plants=plants, efs=efs, source=source, techno_col=techno_col)
+                # 
+                plants = self.map_national_ef(plants=plants, efs=efs, source="sci", techno_col=techno_col)
+                # Keep projected BF BOF wherever possible and fill missing values with constant EF from hasanbeigi
+                plants = plants.assign(EF=plants["hz_bf_ef_mid"].fillna(plants["EF"]))
+                # TODO: compute upper and lower bounds including the EF_delta
             # DRI intensities differ significantly from BF-BOF intensities
             # so we assign global DRI emission factor for this particular technology
             # Source: World Steel Association
@@ -228,10 +242,27 @@ class EmissionFactors:
                                 "Technology",
                                 "WSA_EF"],
                         inplace=True)
+        elif source == "huizhong":
+            plants = pd.merge(plants,
+                            ef[["year", "Country", "Main production process", "hz_bf_ef_mid", "hz_bf_ef_lower", "hz_bf_ef_upper"]],
+                            how='left',
+                            on=["year", "Country", techno_col])
+            # plants.rename(columns={"Huizhong_EF": "EF"}, inplace=True)
         else:
             raise Exception
         return plants
-            
+    
+    def read_huizhong(self):
+        """Read emission factors from Huizhong."""
+        huizhong = pd.read_csv(self.huizhong_path)
+        huizhong = huizhong.assign(**{"Main production process": "integrated (BF)"})
+        # TODO: mapping of ROW scope 2 and EU countries 
+        # TODO: to fill missing values bc there are only the top 8 countries
+        huizhong = huizhong.assign(hz_bf_ef_mid=huizhong["ef_12"],
+                                   hz_bf_ef_lower=huizhong["bof_ohf_ef_lower"]+huizhong["EF_delta"],
+                                   hz_bf_ef_upper=huizhong["bof_ohf_ef_upper"]+huizhong["EF_delta"])
+        huizhong.rename(columns={"country": "Country",}, inplace=True)
+        return huizhong
         
     
     def read_sci(self):

@@ -41,6 +41,7 @@ class EmissionFactorsConfig(BaseModel):
     wsa: str
     jrc: str
     sci: str
+    huizhong: Path
     energy_mix: Path
 
 class HistoricalDataConfig(BaseModel):

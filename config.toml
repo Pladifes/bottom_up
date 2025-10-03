@@ -1,7 +1,7 @@
 [params]
-project_dir = "./bottom_up_alignment"
-save_dir = "" # specify
-steel_db = "./steel_sector.db"
+project_dir = "./"
+save_dir = "./" # specify
+steel_db = "./data/raw/steel_sector.db"
 scenario = "iea"
 scenario_level = "region"
 model_name = "BU_single_OLS"
@@ -13,14 +13,14 @@ asset_level_data = "Global-Steel-Plant-Tracker-2023-03-2.xlsx"
 missing_years = "filled_missing_start_years.xlsx"
 
 [historical_data.top_down]
-refinitiv = "" # specify
-cdp = "" # specify
+refinitiv = "refinitiv_extracts/full_extract_refinitiv_2307.parquet" # specify
+cdp = "data/intermediate/cdp_clean.xlsx" # specify
 
 [historical_data.macro]
 iea_prod = "production/WEO_2023"
 oecd_capa = "capacity/STI_STEEL_MAKINGCAPACITY_08092023132636861.csv"
-wsa_prod = "" # specify
-carbon_price = "" # specify
+wsa_prod = "production/global_steel_production.xlsx" # specify
+carbon_price = "carbon_price/Carbon Price Rework 20230405.xlsx" # specify
 
 [historical_data.micro]
 company_prod = "production/company_steel_production.xlsx"
@@ -29,6 +29,7 @@ company_prod = "production/company_steel_production.xlsx"
 wsa = "emission_factors/EF_WSA.xlsx"
 jrc = "emission_factors/EF_JRC_22.xlsx"
 sci = "emission_factors/EF_SCI_22.xlsx"
+huizhong = "emission_factors/bf_bof_proj_ef.csv"
 energy_mix = "energy_mix/global_energy_mix_2023.csv" 
 
 [mappings]
