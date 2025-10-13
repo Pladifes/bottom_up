@@ -285,6 +285,7 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
     legend_handles_labels = []
     fig, axs = plt.subplots(2,3, figsize=(12,6), sharey=True)
     for i, method in enumerate(list(subsamples_df['Source_bu'].unique())):
+        print(method)
         for j, scenario in enumerate(scenarios):
             ax = axs[i, j]
             # TODO: plot for each scenario
@@ -350,6 +351,7 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
     fig_vert, fig_hor, fig_prod, data, fig_hor_rescaled = get_ghg_trajectory_plot(
         gspt=gspt,
         EF=EF,
+        ef_source="huizhong", # TODO: quickfix
         market_share=market_share,
                                     proj_costs_iea=proj_costs_iea,
                                     glob_prod=glob_prod,

@@ -62,13 +62,47 @@ class EmissionFactors:
                 plants = self.map_national_ef(plants=plants, efs=efs, source=source, techno_col=techno_col)
                 # 
                 plants = self.map_national_ef(plants=plants, efs=efs, source="sci", techno_col=techno_col)
+                
+                # Rescale huizhong time series to anchor to SCI 2022 baseline
+                # This avoids discontinuity between historical (SCI) and projected (huizhong) values
+                
+                # 1. Extract 2022 baseline (with proper parentheses for operator precedence)
+                # Calculate scaling factor per country-technology
+                # Get scaling factor for 2022 only
+                # Get 2022 values from both sources and compute scaling factor
+                huizhong = efs["huizhong"].copy()
+                hui22 = huizhong.loc[huizhong["year"] == 2022, ].copy().drop_duplicates(subset="Country")
+                hui22 = hui22.assign(scaling_factor=hui22["EF_sci"] / hui22["ef_12"])
+                plants = pd.merge(plants, hui22[["Country", "scaling_factor"]], on="Country", how="left")
+                plants.loc[plants["scaling_factor"].notna(), "ef_12"] *= plants.loc[plants["scaling_factor"].notna(), "scaling_factor"]
+                plants.loc[plants["scaling_factor"].notna(), "ef_12_lower"] *= plants.loc[plants["scaling_factor"].notna(), "scaling_factor"]
+                plants.loc[plants["scaling_factor"].notna(), "ef_12_upper"] *= plants.loc[plants["scaling_factor"].notna(), "scaling_factor"]
+                # Merge back to full dataframe to apply scaling factor across all years
+                plants.to_csv("baseline_2022.csv", index=False)
+                
+                # 3. Apply scaling only to rows with huizhong data
+                
+
+                
+                # 4. Clean up temporary column
+                plants.drop(columns=["scaling_factor"], inplace=True)
+                
+                # 5. Update EF with scaled values
                 # Keep projected BF BOF wherever possible and fill missing values with constant EF from hasanbeigi
-                plants = plants.assign(EF=plants["hz_bf_ef_mid"].fillna(plants["EF"]))
+                plants = plants.assign(EF=plants["ef_12"].fillna(plants["EF"]))
+                
+                #  TODO: debug
+                plants.to_csv("plants_match_nat_huizhong.csv", index=False)
+
                 # TODO: compute upper and lower bounds including the EF_delta
+                
             # DRI intensities differ significantly from BF-BOF intensities
             # so we assign global DRI emission factor for this particular technology
             # Source: World Steel Association
             plants.loc[plants["Main production process"] == "integrated (DRI)", "EF"] = 1.65
+            if source == "huizhong":
+                plants = plants.assign(EF_12_lower=plants["ef_12_lower"].fillna(plants["EF"]),
+                                       EF_12_upper=plants["ef_12_upper"].fillna(plants["EF"]))
         else:
             raise Exception
         
@@ -243,8 +277,11 @@ class EmissionFactors:
                                 "WSA_EF"],
                         inplace=True)
         elif source == "huizhong":
+            # TODO: add countries incrementally
+            valid_countries = pd.read_csv(self.wsa_path.parent.parent/"for_review"/"valid_ef_countries.csv")
+            sub_ef = ef.loc[ef["Country"].isin(valid_countries["proj_ef_country"].tolist())]
             plants = pd.merge(plants,
-                            ef[["year", "Country", "Main production process", "hz_bf_ef_mid", "hz_bf_ef_lower", "hz_bf_ef_upper"]],
+                            sub_ef[["year", "Country", "Main production process", "ef_12", "ef_12_lower", "ef_12_upper"]],
                             how='left',
                             on=["year", "Country", techno_col])
             # plants.rename(columns={"Huizhong_EF": "EF"}, inplace=True)
@@ -258,9 +295,9 @@ class EmissionFactors:
         huizhong = huizhong.assign(**{"Main production process": "integrated (BF)"})
         # TODO: mapping of ROW scope 2 and EU countries 
         # TODO: to fill missing values bc there are only the top 8 countries
-        huizhong = huizhong.assign(hz_bf_ef_mid=huizhong["ef_12"],
-                                   hz_bf_ef_lower=huizhong["bof_ohf_ef_lower"]+huizhong["EF_delta"],
-                                   hz_bf_ef_upper=huizhong["bof_ohf_ef_upper"]+huizhong["EF_delta"])
+        # huizhong = huizhong.assign(hz_bf_ef_mid=huizhong["ef_12"],
+        #                            hz_bf_ef_lower=huizhong["bof_ohf_ef_lower"]+huizhong["EF_delta"],
+        #                            hz_bf_ef_upper=huizhong["bof_ohf_ef_upper"]+huizhong["EF_delta"])
         huizhong.rename(columns={"country": "Country",}, inplace=True)
         return huizhong
         

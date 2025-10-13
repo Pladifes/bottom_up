@@ -45,6 +45,7 @@ from feature_eng.plant_features import get_all_country_ur
 
 def get_ghg_trajectory_plot(gspt: GSPTDataset,
                             EF: EmissionFactors,
+                            ef_source: str,
                             market_share: pd.DataFrame,
                             proj_costs_iea: dict,
                             glob_prod: dict,
@@ -193,7 +194,14 @@ def get_ghg_trajectory_plot(gspt: GSPTDataset,
                         xytext=(0, 10), ha='center', fontsize=12, color='grey', weight='bold')
         
             # IEA reference trajectories (NZE, APS, STEPS)
-            for ref in ["NZE", "APS", "STEPS"]:
+            # For NZE plot: only show NZE curve
+            # For APS and STEPS plots: show both APS and STEPS curves
+            if scenario == "NZE":
+                refs_to_plot = ["NZE"]
+            else:
+                refs_to_plot = ["APS", "STEPS"]
+            
+            for ref in refs_to_plot:
                 base_ref_emissions = base_emissions[ref]
                 # Projected emissions from IEA value in 2019 and projected annualized decarbonization rate from NZE scenario
                 sns.lineplot(data=base_ref_emissions,
@@ -293,31 +301,55 @@ def get_ghg_trajectory_plot(gspt: GSPTDataset,
                 proj_plants["CAGR"] = (proj_plants["Main production process"] == "electric") * proj_plants["CAGR"]
                 proj_plants["CAGR"] = proj_plants["CAGR"].replace(0, 1)
                 proj_plants["EF"] = proj_plants["EF"] * proj_plants["CAGR"]
+                if ef_source == "huizhong":
+                    proj_plants["EF_12_lower"] = proj_plants["EF_12_lower"] * proj_plants["CAGR"]
+                    proj_plants["EF_12_upper"] = proj_plants["EF_12_upper"] * proj_plants["CAGR"]
                 # update emissions based on adjusted EF
                 proj_plants["Emissions (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF"] / 1E6
+                if ef_source == "huizhong":
+                    proj_plants["Emissions_low (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_lower"] / 1E6
+                    proj_plants["Emissions_high (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_upper"] / 1E6
             #
             proj_group = convert_plant2parent(proj_plants, gspt2gspt_path=gspt2gspt_path, parent_group_map=parent_group_map)
 
             proj_group["Attributed crude steel capacity (ttpa)"] = proj_group['Nominal crude steel capacity (ttpa)'] * proj_group["Share"]
             proj_group["Attributed capacity"] = proj_group["Attributed crude steel capacity (ttpa)"] * 1E3
             proj_group["Attributed emissions"] = proj_group['Emissions (Gt)'] * 1e9 * proj_group["Share"]
+            if ef_source == "huizhong":
+                proj_group["Attributed emissions_low"] = proj_group['Emissions_low (Gt)'] * 1e9 * proj_group["Share"]
+                proj_group["Attributed emissions_high"] = proj_group['Emissions_high (Gt)'] * 1e9 * proj_group["Share"]
+
             proj_group["Attributed production"] = proj_group['Estimated crude steel production (ttpa)'] * 1e3 * proj_group["Share"]
             
             wm_capa = lambda x: np.average(x, weights=proj_group.loc[x.index, "Attributed crude steel capacity (ttpa)"])
-            proj_feats = proj_group.groupby(['Group', 'year']).agg(
-                                                    emissions=("Attributed emissions", "sum"),
-                                                    elec_int_capa=(f"{scenario}_elec_int", wm_capa),
-                                                    production=("Attributed production", "sum"),
-                                                    capacity=("Attributed capacity", "sum"),
-                                                    EAF_elec_int_capa=("EAF_country_elec_int", wm_capa),)
-            proj_feats["log_Attributed emissions"] = np.log(proj_feats["emissions"]) 
+            if ef_source == "huizhong":
+                proj_feats = proj_group.groupby(['Group', 'year']).agg(
+                                                        emissions=("Attributed emissions", "sum"),
+                                                        emissions_low=("Attributed emissions_low", "sum"),
+                                                        emissions_high=("Attributed emissions_high", "sum"),
+                                                        elec_int_capa=(f"{scenario}_elec_int", wm_capa),
+                                                        production=("Attributed production", "sum"),
+                                                        capacity=("Attributed capacity", "sum"),
+                                                        EAF_elec_int_capa=("EAF_country_elec_int", wm_capa),)
+                proj_feats["log_Attributed emissions"] = np.log(proj_feats["emissions"]) 
+                proj_feats["log_Attributed emissions_low"] = np.log(proj_feats["emissions_low"]) 
+                proj_feats["log_Attributed emissions_high"] = np.log(proj_feats["emissions_high"]) 
+            else:
+                proj_feats = proj_group.groupby(['Group', 'year']).agg(
+                                                        emissions=("Attributed emissions", "sum"),
+                                                        elec_int_capa=(f"{scenario}_elec_int", wm_capa),
+                                                        production=("Attributed production", "sum"),
+                                                        capacity=("Attributed capacity", "sum"),
+                                                        EAF_elec_int_capa=("EAF_country_elec_int", wm_capa),)
+                proj_feats["log_Attributed emissions"] = np.log(proj_feats["emissions"]) 
             
             # features on which model was fit
             try:
                 features = model[0].get_feature_names_out()
             except:
                 features = model[0].feature_names_in_
-                
+            
+            #TODO: work from here
             # Add bottom-up indicators to projected features set
             # e.g. BU emissions, BU intensity
             assert (proj_feats["emissions"] > 0).all()
@@ -326,22 +358,53 @@ def get_ghg_trajectory_plot(gspt: GSPTDataset,
             proj_feats['interaction'] = proj_feats["log_Attributed emissions"] * proj_feats["elec_int_capa"]
             proj_feats['ratio'] = proj_feats["log_Attributed emissions"] / proj_feats["elec_int_capa"]
             proj_feats[f"log BU emissions ({method})"] = model.predict(proj_feats[features])
+            if ef_source == "huizhong":
+                low_features = features.copy()
+                high_features = features.copy()
+                low_features[low_features == "log_Attributed emissions"] = "log_Attributed emissions_low"
+                high_features[high_features == "log_Attributed emissions"] = "log_Attributed emissions_high"
+                # TODO: changing feature may hurdle the model in that case rename
+                # TODO: debug
+                proj_feats[f"log BU emissions_low ({method})"] = model.predict(proj_feats[low_features].rename(columns={"log_Attributed emissions_low": "log_Attributed emissions"}))
+                proj_feats[f"log BU emissions_high ({method})"] = model.predict(proj_feats[high_features].rename(columns={"log_Attributed emissions_high": "log_Attributed emissions"}))
             proj_feats[f"log BU err ({method})"] = get_prediction_interval(X0=proj_feats[features], 
                                           X_train=X_train, 
                                           y_train=y_train, 
                                           model=model, 
                                           center=True)
             proj_feats[f"BU emissions ({method})"] = np.exp(proj_feats[f"log BU emissions ({method})"])
+            if ef_source == "huizhong":
+                # TODO: uncomment when model checked
+                proj_feats[f"BU emissions_low ({method})"] = np.exp(proj_feats[f"log BU emissions_low ({method})"])
+                proj_feats[f"BU emissions_high ({method})"] = np.exp(proj_feats[f"log BU emissions_high ({method})"])
+                
             proj_feats[f"BU intensity ({method})"] = proj_feats[f"BU emissions ({method})"] / proj_feats["production"]
             proj_feats[f"BU intensity ({method})"] = proj_feats[f"BU intensity ({method})"].replace(np.inf, np.nan)
             proj_feats = proj_feats.reset_index()
-            bu_sectoral_proj = proj_feats.groupby("year").agg({f"BU emissions ({method})": "sum",
-                                                               "emissions": 'sum',
-                                                               "production": "sum",
-                                                               "capacity": "sum"
-                                                               }).reset_index()
+            if ef_source == "huizhong":
+                bu_sectoral_proj = proj_feats.groupby("year").agg({f"BU emissions ({method})": "sum",
+                                                                    f"BU emissions_low ({method})": "sum", # TODO: uncomment when model checked
+                                                                    f"BU emissions_high ({method})": "sum",
+                                                                     f"emissions_low": "sum",
+                                                                    f"emissions_high": "sum",
+                                                                "emissions": 'sum',
+                                                                "production": "sum",
+                                                                "capacity": "sum"
+                                                                }).reset_index()
+            else:
+                bu_sectoral_proj = proj_feats.groupby("year").agg({f"BU emissions ({method})": "sum",
+                                                    "emissions": 'sum',
+                                                    "production": "sum",
+                                                    "capacity": "sum"
+                                                    }).reset_index()
             # emissions = raw bu emissions
             bu_sectoral_proj['Emissions (Gt)'] = bu_sectoral_proj[f"BU emissions ({method})"] / 1e9
+            if ef_source == "huizhong":
+                # TODO: uncomment when model checked
+                bu_sectoral_proj['Emissions_low (Gt)'] = bu_sectoral_proj[f"BU emissions_low ({method})"] / 1e9
+                bu_sectoral_proj['Emissions_high (Gt)'] = bu_sectoral_proj[f"BU emissions_high ({method})"] / 1e9
+                bu_sectoral_proj['Raw Emissions_low (Gt)'] = bu_sectoral_proj["emissions_low"] / 1e9
+                bu_sectoral_proj['Raw Emissions_high (Gt)'] = bu_sectoral_proj["emissions_high"] / 1e9
             bu_sectoral_proj['Raw Emissions (Gt)'] = bu_sectoral_proj["emissions"] / 1e9
             bu_sectoral_proj[f'UR ({method})'] = bu_sectoral_proj["production"] / bu_sectoral_proj["capacity"]
             bu_sectoral_proj[f"Intensity ({method})"] = bu_sectoral_proj[f"BU emissions ({method})"] / bu_sectoral_proj["production"]
@@ -409,21 +472,35 @@ def get_ghg_trajectory_plot(gspt: GSPTDataset,
                 label=emissions_label,
                 linestyle="dashed",
                 ax=ax_hor)
-
-
-        
-        # Add uncertainty bands
-        if err_style == "band":
-            uct_index = list(range(2022, end_year+1))
-            lower_uct_data = data[scenario]["carbon_efficiency"]["sector"]
-            lower_uct_data = lower_uct_data.loc[lower_uct_data["year"].isin(uct_index), "Emissions (Gt)"]
-            upper_uct_data = data[scenario]["carbon_intensity"]["sector"]
-            upper_uct_data = upper_uct_data.loc[upper_uct_data["year"].isin(uct_index), "Emissions (Gt)"]
-            uct_label = "Bounds on global emissions of the steel sector \n"\
-                        "obtained by choosing the most polluting (upper \n bound) "\
-                        "and least polluting (lower bound) plants"
-            ax_vert.fill_between(uct_index, lower_uct_data, upper_uct_data, alpha=0.2, color="red", zorder=-1, label=uct_label)
-            ax_hor.fill_between(uct_index, lower_uct_data, upper_uct_data, alpha=0.2, color="red", zorder=-1, label=uct_label)
+                
+                # Add error bars if emissions_low and emissions_high exist
+                if ef_source == "huizhong" and "Emissions_low (Gt)" in bu_sectoral_proj.columns:
+                    years = bu_sectoral_proj['year']
+                    emissions = bu_sectoral_proj["Emissions (Gt)"]
+                    emissions_low = bu_sectoral_proj["Emissions_low (Gt)"]
+                    emissions_high = bu_sectoral_proj["Emissions_high (Gt)"]
+                    
+                    # Calculate error bar sizes (distance from center to bounds)
+                    yerr_lower = emissions - emissions_low
+                    yerr_upper = emissions_high - emissions
+                    
+                    # Plot error bars on vertical chart
+                    ax_vert.errorbar(years, emissions, 
+                                    yerr=[yerr_lower, yerr_upper],
+                                    fmt='none', 
+                                    color=drivers_colors[method],
+                                    alpha=0.3,
+                                    capsize=3,
+                                    capthick=1)
+                    
+                    # Plot error bars on horizontal chart
+                    ax_hor.errorbar(years, emissions, 
+                                   yerr=[yerr_lower, yerr_upper],
+                                   fmt='none', 
+                                   color=drivers_colors[method],
+                                   alpha=0.3,
+                                   capsize=3,
+                                   capthick=1)
         
         # Set labels and title
         for ax_ in [ax_vert, ax_hor]:
@@ -464,14 +541,23 @@ def get_ghg_trajectory_plot(gspt: GSPTDataset,
     # Produce same graphs but rescaled relative to 2022 emissions
     fig_hor_rescaled = copy.deepcopy(fig_hor)
     axes = fig_hor_rescaled.get_axes()
+    normalization_factor = float(agg_BU.loc[agg_BU['year'] == 2022, 'Emissions (Gt)'].iloc[0])
+    
     for ax in axes:
         for line in ax.get_lines():
             # Get the original data
             x_data, y_data = line.get_data()
             # Rescale the y-data
-            y_data_rescaled = y_data / float(agg_BU.loc[agg_BU['year'] == 2022, 'Emissions (Gt)'].iloc[0])
+            y_data_rescaled = y_data / normalization_factor
             # Update the plot with the rescaled data
             line.set_ydata(y_data_rescaled)
+        
+        # Remove error bars from rescaled figure (simpler than trying to rescale them)
+        # The main figure (fig_hor) still has error bars showing absolute uncertainty
+        for child in list(ax.get_children()):
+            if hasattr(child, 'has_yerr') and child.has_yerr:
+                child.remove()
+        
         # Adjust the limits if needed
         ax.set_ylim(0.75,1.1)
         ax.set_ylabel("Emissions relative to 2022 levels")
@@ -480,39 +566,31 @@ def get_ghg_trajectory_plot(gspt: GSPTDataset,
         # ax.relim()
         # ax.autoscale_view()
     
-    for ax in axes:
-        for scenario in ["NZE", "APS", "STEPS"]:
-            base_ref_emissions = base_emissions[scenario]
+    # Annotate 2030 values for reference scenarios on rescaled figure
+    # Match the same logic as plotting: NZE subplot only shows NZE, others show APS and STEPS
+    scenarios_list = ["NZE", "APS", "STEPS"]
+    for i, ax in enumerate(axes):
+        # Skip if we've gone beyond the 3 scenarios (in case there's a 4th hidden axis)
+        if i >= len(scenarios_list):
+            continue
+            
+        scenario = scenarios_list[i]
+        
+        # Determine which reference scenarios to annotate based on current subplot
+        if scenario == "NZE":
+            refs_to_annotate = ["NZE"]
+        else:
+            refs_to_annotate = ["APS", "STEPS"]
+        
+        for ref in refs_to_annotate:
+            base_ref_emissions = base_emissions[ref]
             # Normalized projected emissions for each reference trajectory
             base_ref_emissions_30 = float(base_ref_emissions.loc[base_ref_emissions['year'] == 2030, 'Emissions (Gt)']) / float(agg_BU.loc[agg_BU['year'] == 2022, 'Emissions (Gt)'].iloc[0])
             ax.annotate(f"{base_ref_emissions_30:.2f}", (2030.5, base_ref_emissions_30), textcoords='offset points', xytext=(0, 1),
                         ha='center', fontsize=10, color=base_colors[ref], weight='bold')
     
-    for ax in axes:
-        ax_title = ax.get_title()
-        if ax_title == "Net Zero Scenario":
-            scenario = "NZE"
-        elif ax_title == "Announced Pledges Scenario":
-            scenario = "APS"
-        elif ax_title == "Stated Policies Scenario":
-            scenario = "STEPS"
-        
-        # Add uncertainty bands
-        if err_style == "band":
-            uct_index = list(range(2022, end_year+1))
-            lower_uct_data = data[scenario]["carbon_efficiency"]["sector"]
-            lower_uct_data = lower_uct_data.loc[lower_uct_data["year"].isin(uct_index), "Emissions (Gt)"]
-            # Normalize by 2022 emissions
-            lower_uct_data = lower_uct_data / float(agg_BU.loc[agg_BU['year'] == 2022, 'Emissions (Gt)'].iloc[0])
-            upper_uct_data = data[scenario]["carbon_intensity"]["sector"]
-            upper_uct_data = upper_uct_data.loc[upper_uct_data["year"].isin(uct_index), "Emissions (Gt)"]
-            # Normalize by 2022 emissions
-            upper_uct_data = upper_uct_data / float(agg_BU.loc[agg_BU['year'] == 2022, 'Emissions (Gt)'].iloc[0])
-
-            uct_label = "Bounds on global emissions of the steel sector \n"\
-                        "obtained by choosing the most polluting (upper \n bound) "\
-                        "and least polluting (lower bound) plants"
-            ax.fill_between(uct_index, lower_uct_data, upper_uct_data, alpha=0.2, color="red", zorder=-1, label=uct_label)
+    # Note: Error bars for rescaled figure are handled within the rescaling loop above
+    # The error bars are automatically rescaled along with the line data
 
     return fig_vert, fig_hor, fig_prod, data, fig_hor_rescaled
 
@@ -1022,13 +1100,19 @@ def get_proj_BU_constant_ms(gspt: pd.DataFrame,
         techno_col = "Techno_map"
     else:
         techno_col = "Main production process"
+    source = 'huizhong'
     proj_plants_prod = EF.match_emissions_factors(plants=proj_plants_prod, 
                                                   techno_col=techno_col,
                                                   level="country",
-                                                  source='huizhong',
+                                                  source=source,
                                                   proj=True) # TODO: old sci
+    # TODO: debug
+    proj_plants_prod.to_csv("proj_plants_prod.csv", index=False)
     # Share of plant-level emissions attributed to owner with respect to their stake in the plant
     proj_plants_prod['Estimated emissions (ttpa)'] = proj_plants_prod["Estimated crude steel production (ttpa)"] * proj_plants_prod['EF'] 
+    if source == "huizhong":
+        proj_plants_prod['Estimated emissions_low (ttpa)'] = proj_plants_prod["Estimated crude steel production (ttpa)"] * proj_plants_prod['EF_12_lower'] 
+        proj_plants_prod['Estimated emissions_high (ttpa)'] = proj_plants_prod["Estimated crude steel production (ttpa)"] * proj_plants_prod['EF_12_upper'] 
     
     # shutdown plants based on global capacity
     # look at removed_plants for debug
@@ -1040,9 +1124,18 @@ def get_proj_BU_constant_ms(gspt: pd.DataFrame,
     proj_company["Attributed crude steel capacity (ttpa)"] = proj_company['Nominal crude steel capacity (ttpa)'] * proj_company['Share']
     proj_company["Attributed production (ttpa)"] = proj_company["Estimated crude steel production (ttpa)"] * proj_company['Share']
     proj_company['Attributed emissions (ttpa)'] = proj_company['Attributed production (ttpa)'] * proj_company['EF']
-
+    if source == "huizhong":
+        proj_company['Attributed emissions_low (ttpa)'] = proj_company["Attributed production (ttpa)"] * proj_company['EF_12_lower'] 
+        proj_company['Attributed emissions_high (ttpa)'] = proj_company["Attributed production (ttpa)"] * proj_company['EF_12_upper'] 
         
-    proj_company = proj_company.groupby(["Group", "year"]).agg({'Attributed emissions (ttpa)': "sum",
+    if source == "huizhong":
+        proj_company = proj_company.groupby(["Group", "year"]).agg({'Attributed emissions (ttpa)': "sum",
+                                                                    'Attributed emissions_low (ttpa)': "sum",
+                                                                    'Attributed emissions_high (ttpa)': "sum",
+                                                                    "Attributed production (ttpa)": 'sum',
+                                                                    "Attributed crude steel capacity (ttpa)": "sum"}).reset_index()
+    else:
+        proj_company = proj_company.groupby(["Group", "year"]).agg({'Attributed emissions (ttpa)': "sum",
                                                                     "Attributed production (ttpa)": 'sum',
                                                                     "Attributed crude steel capacity (ttpa)": "sum"}).reset_index()
     
