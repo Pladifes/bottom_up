@@ -571,10 +571,10 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
         markersize=10, 
         markeredgewidth=1.5,
         alpha=0.5,
-        label='Uncertainty bounds (95% CI)'
+        label='Uncertainty bounds'
     )
     handles_list.append(uncertainty_handle)
-    labels_list.append('Uncertainty bounds (95% CI)')
+    labels_list.append('Uncertainty bounds')
     
     # Add the shared legend below the plots (all items on one line)
     fig_elec_sensitivity.legend(
@@ -705,8 +705,464 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
     fig_intensity.savefig(fig_intensity_path_pdf, dpi=600, bbox_inches='tight')
     fig_intensity.savefig(fig_intensity_path_png, dpi=600, bbox_inches='tight')
     
+    # ====================================================================
+    # CREATE NORMALIZED EMISSIONS PLOT
+    # ====================================================================
+    typer.echo("Generating normalized emissions plot...")
+    
+    # Get 2022 historical emissions value as baseline
+    historical_2022_emissions = float(agg_bu_histo.loc[agg_bu_histo["year"] == 2022, "Emissions (Gt)"])
+    typer.echo(f"  Using 2022 baseline emissions: {historical_2022_emissions:.3f} Gt CO2")
+    
+    # Create normalized emissions figure with same layout as original
+    fig_emis_norm, axs_emis_norm = plt.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
+    
+    # Plot for each electricity intensity source
+    for idx, (elec_source_name, elec_int_data) in enumerate(elec_int_sources.items()):
+        ax = axs_emis_norm[idx]
+        ax.set_xlim(2017, 2031)
+        ax.set_ylim(0.75, 1.05)
+        ax.set_box_aspect(1)
+        ax.grid("both")
+        ax.set_title(f"NZE with {elec_source_name} electricity intensity", fontsize=12, weight='bold')
+        ax.set_ylabel("Normalized Emissions (2022 = 1.0)")
+        ax.set_xlabel("Year")
+        
+        # Plot historical BU emissions (normalized)
+        historical_norm = agg_bu_histo[['year', 'Emissions (Gt)']].copy()
+        historical_norm['Normalized Emissions'] = historical_norm['Emissions (Gt)'] / historical_2022_emissions
+        sns.lineplot(data=historical_norm,
+                    x='year',
+                    y="Normalized Emissions",
+                    label="Historical BU emissions",
+                    ax=ax)
+        
+        # Add starting point marker at 2022
+        ax.scatter([2022], [1.0], marker='o', color="grey", s=200, zorder=2)
+        ax.annotate(f"{1.0:.2f}", (2022, 1.0 + 0.015), textcoords='offset points',
+                   xytext=(0, 10), ha='center', fontsize=12, color='grey', weight='bold')
+        
+        # Plot NZE reference trajectory (normalized)
+        nze_ref_norm = base_nze_emissions[['year', 'Emissions (Gt)']].copy()
+        nze_ref_norm['Normalized Emissions'] = nze_ref_norm['Emissions (Gt)'] / historical_2022_emissions
+        sns.lineplot(data=nze_ref_norm,
+                    x='year',
+                    y="Normalized Emissions",
+                    linewidth=2,
+                    label="Projected IEA emissions (NZE slope)",
+                    color="green",
+                    linestyle="dotted",
+                    zorder=2,
+                    ax=ax)
+        
+        # Annotate 2030 NZE reference value
+        nze_ref_2030 = float(nze_ref_norm.loc[nze_ref_norm['year'] == 2030, 'Normalized Emissions'])
+        ax.annotate(f"{nze_ref_2030:.2f}", (2030.5, nze_ref_2030), textcoords='offset points', 
+                   xytext=(0, 10), ha='center', fontsize=10, color='green', weight='bold')
+        
+        # Plot each method's trajectory (normalized)
+        drivers_colors = {"constant_UR": "orange", "company_UR": "green"}
+        for method in ["constant_UR", "company_UR"]:
+            if elec_source_name in data_elec_sensitivity and method in data_elec_sensitivity[elec_source_name]:
+                bu_data = data_elec_sensitivity[elec_source_name][method].copy()
+                bu_data['Normalized Emissions'] = bu_data['Emissions (Gt)'] / historical_2022_emissions
+                
+                if method == "company_UR":
+                    emissions_label = "Projected BU emissions (constant market share)"
+                elif method == "constant_UR":
+                    emissions_label = "Projected BU emissions (country UR)"
+                else:
+                    emissions_label = f"Projected BU emissions ({method})"
+                
+                sns.lineplot(data=bu_data,
+                            x='year',
+                            y="Normalized Emissions",
+                            label=emissions_label,
+                            linestyle="dashed",
+                            color=drivers_colors[method],
+                            ax=ax)
+                
+                # Add error bars if uncertainty bounds are available (also normalized)
+                if "Emissions_low (Gt)" in bu_data.columns and "Emissions_high (Gt)" in bu_data.columns:
+                    years = bu_data['year']
+                    emissions_norm = bu_data["Normalized Emissions"]
+                    emissions_low_norm = bu_data["Emissions_low (Gt)"] / historical_2022_emissions
+                    emissions_high_norm = bu_data["Emissions_high (Gt)"] / historical_2022_emissions
+                    
+                    # Calculate error bar sizes (distance from center to bounds)
+                    yerr_lower = emissions_norm - emissions_low_norm
+                    yerr_upper = emissions_high_norm - emissions_norm
+                    
+                    # Plot error bars
+                    ax.errorbar(years, emissions_norm, 
+                               yerr=[yerr_lower, yerr_upper],
+                               fmt='none', 
+                               color=drivers_colors[method],
+                               alpha=0.3,
+                               capsize=3,
+                               capthick=1)
+    
+    # Add overall title
+    fig_emis_norm.suptitle(
+        "Sensitivity of NZE scenario to electricity intensity decarbonisation assumptions\n(Normalized to 2022 emissions = 1.0)",
+        fontsize=16, 
+        weight="bold", 
+        y=1.02
+    )
+    
+    # Create a single shared legend
+    handles_list = []
+    labels_list = []
+    for ax in axs_emis_norm:
+        h, labels = ax.get_legend_handles_labels()
+        for handle, label in zip(h, labels):
+            if label not in labels_list:
+                handles_list.append(handle)
+                labels_list.append(label)
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+    
+    # Add uncertainty bar representation to legend
+    uncertainty_handle = Line2D(
+        [], [], 
+        color='gray', 
+        marker='|', 
+        linestyle='None',
+        markersize=10, 
+        markeredgewidth=1.5,
+        alpha=0.5,
+        label='Uncertainty bounds'
+    )
+    handles_list.append(uncertainty_handle)
+    labels_list.append('Uncertainty bounds')
+    
+    fig_emis_norm.legend(
+        handles_list, 
+        labels_list, 
+        loc='lower center', 
+        bbox_to_anchor=(0.5, -0.05),
+        ncol=len(labels_list),
+        frameon=True,
+        fontsize=10
+    )
+    
+    fig_emis_norm.tight_layout(rect=[0, 0.03, 1, 0.96])
+    
+    # Save normalized emissions plot
+    fig_emis_norm_path_pdf = plots_dir / "nze_elec_intensity_sensitivity_normalized.pdf"
+    fig_emis_norm_path_png = plots_dir / "nze_elec_intensity_sensitivity_normalized.png"
+    fig_emis_norm.savefig(fig_emis_norm_path_pdf, dpi=600, bbox_inches='tight')
+    fig_emis_norm.savefig(fig_emis_norm_path_png, dpi=600, bbox_inches='tight')
+    
+    # ====================================================================
+    # CREATE NORMALIZED EMISSIONS PLOT - METHODS COMPARISON (NZE ONLY)
+    # ====================================================================
+    typer.echo("Generating normalized emissions plot comparing methods...")
+    
+    # Methods to compare
+    methods_to_compare = ["carbon_efficiency", "carbon_intensity", "company_UR"]
+    method_labels = {
+        "carbon_efficiency": "Carbon Efficiency",
+        "carbon_intensity": "Carbon Intensity", 
+        "company_UR": "Constant Market Share"
+    }
+    
+    # Store data for methods comparison
+    data_methods_comparison = {}
+    
+    # Create figure with 3 subplots
+    fig_methods_norm, axs_methods_norm = plt.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
+    
+    typer.echo("  Computing projections for methods comparison...")
+    
+    # Run projections for each method using NZE scenario
+    for method in methods_to_compare:
+        typer.echo(f"    Processing {method}...")
+        
+        start_year, end_year = 2023, 2030
+        
+        # Get BU projected emissions using NZE scenario
+        proj_company, proj_plants = get_bu_proj_emissions(
+            gspt=gspt,
+            EF=EF,
+            glob_prod_iea=glob_prod["NZE"], 
+            glob_bu_prod=glob_bu_prod,
+            market_share=market_share,
+            parent_group_map_path=parent_group_map_path,
+            gspt2refi_map=gspt2refi,
+            gspt2gspt_path=gspt2gspt_path,
+            proj_costs=proj_costs_iea["NZE"],
+            start_year=start_year,
+            end_year=end_year,
+            method=method,
+            glob_capa=glob_capa["NZE"],
+            cbudget=pd.read_excel(Path("./src/projections_") / "proj_country_prod_nze.xlsx")
+        )
+        
+        # Convert uncertainty bounds to Gt if they exist
+        if "Estimated emissions_low (ttpa)" in proj_plants.columns:
+            proj_plants["Emissions_low (Gt)"] = proj_plants["Estimated emissions_low (ttpa)"] / 1e6
+            proj_plants["Emissions_high (Gt)"] = proj_plants["Estimated emissions_high (ttpa)"] / 1e6
+        
+        # Apply NZE electricity intensity (global level)
+        r_elec_nze = get_elec_gen_caagr(elec_int=elec_int_nze, start_year=2022, end_year=2030)
+        proj_plants = get_proj_elec_int(
+            proj_plants, 
+            r=r_elec_nze, 
+            energy_mix_path=energy_mix_path, 
+            level="global",
+            scenario="NZE",
+            world_fpath=world_fpath,
+            regions_fpath=regions_fpath,
+            gspt2iea_countries_path=gspt2iea_countries_path
+        )
+        
+        # Apply EAF decarbonization if enabled
+        if params.EAF_decarb:
+            base_all = 460
+            end_nze = 186
+            caagr = get_cagr(base_value=base_all, end_value=end_nze, n=8)
+            years = list(range(2023, 2031))
+            elec_cagr_df = pd.DataFrame({
+                "year": years,
+                "EAF_CAGR": [(1+caagr)**(i+1) for i in range(len(years))],
+            })
+            
+            if "CAGR" in proj_plants.columns:
+                proj_plants = proj_plants.drop(columns=["CAGR"])
+            
+            proj_plants = pd.merge(proj_plants, elec_cagr_df, on="year", how='left')
+            proj_plants["EAF_CAGR"] = (proj_plants["Main production process"] == "electric") * proj_plants["EAF_CAGR"]
+            proj_plants["EAF_CAGR"] = proj_plants["EAF_CAGR"].replace(0, 1)
+            proj_plants["EF"] = proj_plants["EF"] * proj_plants["EAF_CAGR"]
+            
+            if "EF_12_lower" in proj_plants.columns:
+                proj_plants["EF_12_lower"] = proj_plants["EF_12_lower"] * proj_plants["EAF_CAGR"]
+                proj_plants["EF_12_upper"] = proj_plants["EF_12_upper"] * proj_plants["EAF_CAGR"]
+                proj_plants["Emissions_low (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_lower"] / 1E6
+                proj_plants["Emissions_high (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_upper"] / 1E6
+            
+            proj_plants["Emissions (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF"] / 1E6
+            proj_plants = proj_plants.drop(columns=["EAF_CAGR"])
+        
+        # Convert to parent company level
+        proj_group = convert_plant2parent(proj_plants, gspt2gspt_path=gspt2gspt_path, parent_group_map=parent_group_map)
+        
+        # Calculate attributed values
+        proj_group["Attributed crude steel capacity (ttpa)"] = proj_group['Nominal crude steel capacity (ttpa)'] * proj_group["Share"]
+        proj_group["Attributed capacity"] = proj_group["Attributed crude steel capacity (ttpa)"] * 1E3
+        proj_group["Attributed emissions"] = proj_group['Emissions (Gt)'] * 1e9 * proj_group["Share"]
+        proj_group["Attributed production"] = proj_group['Estimated crude steel production (ttpa)'] * 1e3 * proj_group["Share"]
+        
+        if "Emissions_low (Gt)" in proj_group.columns:
+            proj_group["Attributed emissions_low"] = proj_group['Emissions_low (Gt)'] * 1e9 * proj_group["Share"]
+            proj_group["Attributed emissions_high"] = proj_group['Emissions_high (Gt)'] * 1e9 * proj_group["Share"]
+        
+        # Aggregate features
+        proj_feats = proj_group.groupby(['Group', 'year']).agg({
+            "Attributed emissions": "sum",
+            "Attributed production": "sum",
+            "Attributed capacity": "sum",
+        }).rename(columns={
+            "Attributed emissions": "emissions",
+            "Attributed production": "production", 
+            "Attributed capacity": "capacity"
+        })
+        
+        if "Attributed emissions_low" in proj_group.columns:
+            proj_feats_uncert = proj_group.groupby(['Group', 'year']).agg({
+                "Attributed emissions_low": "sum",
+                "Attributed emissions_high": "sum"
+            }).rename(columns={
+                "Attributed emissions_low": "emissions_low",
+                "Attributed emissions_high": "emissions_high"
+            })
+            proj_feats = pd.concat([proj_feats, proj_feats_uncert], axis=1)
+        
+        proj_feats["log_Attributed emissions"] = np.log(proj_feats["emissions"])
+        
+        if "emissions_low" in proj_feats.columns:
+            proj_feats["log_Attributed emissions_low"] = np.log(proj_feats["emissions_low"])
+            proj_feats["log_Attributed emissions_high"] = np.log(proj_feats["emissions_high"])
+        
+        # Predict using the model
+        proj_feats[f"log BU emissions ({method})"] = model.predict(proj_feats[["log_Attributed emissions"]])
+        proj_feats[f"BU emissions ({method})"] = np.exp(proj_feats[f"log BU emissions ({method})"])
+        
+        if "log_Attributed emissions_low" in proj_feats.columns:
+            proj_feats[f"log BU emissions_low ({method})"] = model.predict(proj_feats[["log_Attributed emissions_low"]].rename(columns={"log_Attributed emissions_low": "log_Attributed emissions"}))
+            proj_feats[f"log BU emissions_high ({method})"] = model.predict(proj_feats[["log_Attributed emissions_high"]].rename(columns={"log_Attributed emissions_high": "log_Attributed emissions"}))
+            proj_feats[f"BU emissions_low ({method})"] = np.exp(proj_feats[f"log BU emissions_low ({method})"])
+            proj_feats[f"BU emissions_high ({method})"] = np.exp(proj_feats[f"log BU emissions_high ({method})"])
+        
+        proj_feats = proj_feats.reset_index()
+        
+        # Aggregate to sectoral level
+        agg_cols = {
+            f"BU emissions ({method})": "sum",
+            "emissions": 'sum',
+            "production": "sum",
+            "capacity": "sum"
+        }
+        
+        if f"BU emissions_low ({method})" in proj_feats.columns:
+            agg_cols[f"BU emissions_low ({method})"] = "sum"
+            agg_cols[f"BU emissions_high ({method})"] = "sum"
+        
+        bu_sectoral_proj = proj_feats.groupby("year").agg(agg_cols).reset_index()
+        bu_sectoral_proj['Emissions (Gt)'] = bu_sectoral_proj[f"BU emissions ({method})"] / 1e9
+        
+        if f"BU emissions_low ({method})" in bu_sectoral_proj.columns:
+            bu_sectoral_proj['Emissions_low (Gt)'] = bu_sectoral_proj[f"BU emissions_low ({method})"] / 1e9
+            bu_sectoral_proj['Emissions_high (Gt)'] = bu_sectoral_proj[f"BU emissions_high ({method})"] / 1e9
+        
+        # Add 2022 value for continuity
+        bu_emissions_22 = float(agg_bu_histo.loc[agg_bu_histo["year"] == 2022, "Emissions (Gt)"])
+        new_row = {"year": [2022], "Emissions (Gt)": [bu_emissions_22]}
+        bu_sectoral_proj = pd.concat([pd.DataFrame(new_row), bu_sectoral_proj], axis=0).sort_values(by="year", ascending=True)
+        
+        # Store data
+        data_methods_comparison[method] = bu_sectoral_proj
+    
+    # Plot each method in its own subplot
+    for idx, method in enumerate(methods_to_compare):
+        ax = axs_methods_norm[idx]
+        ax.set_xlim(2017, 2031)
+        ax.set_ylim(0.75, 1.05)
+        ax.set_box_aspect(1)
+        ax.grid("both")
+        ax.set_title(f"{method_labels[method]}", fontsize=12, weight='bold')
+        ax.set_ylabel("Normalized Emissions (2022 = 1.0)")
+        ax.set_xlabel("Year")
+        
+        # Plot historical BU emissions (normalized)
+        historical_norm = agg_bu_histo[['year', 'Emissions (Gt)']].copy()
+        historical_norm['Normalized Emissions'] = historical_norm['Emissions (Gt)'] / historical_2022_emissions
+        sns.lineplot(data=historical_norm,
+                    x='year',
+                    y="Normalized Emissions",
+                    label="Historical BU emissions",
+                    ax=ax)
+        
+        # Add starting point marker at 2022
+        ax.scatter([2022], [1.0], marker='o', color="grey", s=200, zorder=2)
+        ax.annotate(f"{1.0:.2f}", (2022, 1.0 + 0.015), textcoords='offset points',
+                   xytext=(0, 10), ha='center', fontsize=12, color='grey', weight='bold')
+        
+        # Plot NZE reference trajectory (normalized)
+        nze_ref_norm = base_nze_emissions[['year', 'Emissions (Gt)']].copy()
+        nze_ref_norm['Normalized Emissions'] = nze_ref_norm['Emissions (Gt)'] / historical_2022_emissions
+        sns.lineplot(data=nze_ref_norm,
+                    x='year',
+                    y="Normalized Emissions",
+                    linewidth=2,
+                    label="Projected IEA emissions (NZE slope)",
+                    color="green",
+                    linestyle="dotted",
+                    zorder=2,
+                    ax=ax)
+        
+        # Annotate 2030 NZE reference value
+        nze_ref_2030 = float(nze_ref_norm.loc[nze_ref_norm['year'] == 2030, 'Normalized Emissions'])
+        ax.annotate(f"{nze_ref_2030:.2f}", (2030.5, nze_ref_2030), textcoords='offset points', 
+                   xytext=(0, 10), ha='center', fontsize=10, color='green', weight='bold')
+        
+        # Plot this method's trajectory (normalized)
+        if method in data_methods_comparison:
+            bu_data = data_methods_comparison[method].copy()
+            bu_data['Normalized Emissions'] = bu_data['Emissions (Gt)'] / historical_2022_emissions
+            
+            emissions_label = f"Projected BU emissions ({method_labels[method]})"
+            method_color = "blue"
+            
+            sns.lineplot(data=bu_data,
+                        x='year',
+                        y="Normalized Emissions",
+                        label=emissions_label,
+                        linestyle="dashed",
+                        color=method_color,
+                        ax=ax)
+            
+            # Add error bars if uncertainty bounds are available (also normalized)
+            if "Emissions_low (Gt)" in bu_data.columns and "Emissions_high (Gt)" in bu_data.columns:
+                years = bu_data['year']
+                emissions_norm = bu_data["Normalized Emissions"]
+                emissions_low_norm = bu_data["Emissions_low (Gt)"] / historical_2022_emissions
+                emissions_high_norm = bu_data["Emissions_high (Gt)"] / historical_2022_emissions
+                
+                # Calculate error bar sizes
+                yerr_lower = emissions_norm - emissions_low_norm
+                yerr_upper = emissions_high_norm - emissions_norm
+                
+                # Plot error bars
+                ax.errorbar(years, emissions_norm, 
+                           yerr=[yerr_lower, yerr_upper],
+                           fmt='none', 
+                           color=method_color,
+                           alpha=0.3,
+                           capsize=3,
+                           capthick=1)
+    
+    # Add overall title
+    fig_methods_norm.suptitle(
+        "Comparison of Projection Methods under NZE Scenario\n(Normalized to 2022 emissions = 1.0)",
+        fontsize=16, 
+        weight="bold", 
+        y=1.02
+    )
+    
+    # Create a single shared legend
+    handles_list_methods = []
+    labels_list_methods = []
+    for ax in axs_methods_norm:
+        h, labels = ax.get_legend_handles_labels()
+        for handle, label in zip(h, labels):
+            if label not in labels_list_methods:
+                handles_list_methods.append(handle)
+                labels_list_methods.append(label)
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+    
+    # Add uncertainty bar representation to legend
+    uncertainty_handle_methods = Line2D(
+        [], [], 
+        color='gray', 
+        marker='|', 
+        linestyle='None',
+        markersize=10, 
+        markeredgewidth=1.5,
+        alpha=0.5,
+        label='Uncertainty bounds'
+    )
+    handles_list_methods.append(uncertainty_handle_methods)
+    labels_list_methods.append('Uncertainty bounds')
+    
+    fig_methods_norm.legend(
+        handles_list_methods, 
+        labels_list_methods, 
+        loc='lower center', 
+        bbox_to_anchor=(0.5, -0.05),
+        ncol=len(labels_list_methods),
+        frameon=True,
+        fontsize=10
+    )
+    
+    fig_methods_norm.tight_layout(rect=[0, 0.03, 1, 0.96])
+    
+    # Save methods comparison plot
+    fig_methods_norm_path_pdf = plots_dir / "nze_methods_comparison_normalized.pdf"
+    fig_methods_norm_path_png = plots_dir / "nze_methods_comparison_normalized.png"
+    fig_methods_norm.savefig(fig_methods_norm_path_pdf, dpi=600, bbox_inches='tight')
+    fig_methods_norm.savefig(fig_methods_norm_path_png, dpi=600, bbox_inches='tight')
+    
     typer.echo(f"✓ Saved emissions trajectory PDF: {fig_elec_sensitivity_path_pdf}")
     typer.echo(f"✓ Saved emissions trajectory PNG: {fig_elec_sensitivity_path_png}")
+    typer.echo(f"✓ Saved normalized emissions trajectory PDF: {fig_emis_norm_path_pdf}")
+    typer.echo(f"✓ Saved normalized emissions trajectory PNG: {fig_emis_norm_path_png}")
+    typer.echo(f"✓ Saved methods comparison PDF: {fig_methods_norm_path_pdf}")
+    typer.echo(f"✓ Saved methods comparison PNG: {fig_methods_norm_path_png}")
     typer.echo(f"✓ Saved emission intensity PDF: {fig_intensity_path_pdf}")
     typer.echo(f"✓ Saved emission intensity PNG: {fig_intensity_path_png}")
     typer.echo(f"✓ Saved combined plot data to: {combined_excel_path}")
