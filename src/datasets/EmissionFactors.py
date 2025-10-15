@@ -72,11 +72,11 @@ class EmissionFactors:
                 # Get 2022 values from both sources and compute scaling factor
                 huizhong = efs["huizhong"].copy()
                 hui22 = huizhong.loc[huizhong["year"] == 2022, ].copy().drop_duplicates(subset="Country")
-                hui22 = hui22.assign(scaling_factor=hui22["EF_sci"] / hui22["ef_12"])
+                hui22 = hui22.assign(scaling_factor=hui22["EF_sci"] / hui22["adj_ef_12"])
                 plants = pd.merge(plants, hui22[["Country", "scaling_factor"]], on="Country", how="left")
-                plants.loc[plants["scaling_factor"].notna(), "ef_12"] *= plants.loc[plants["scaling_factor"].notna(), "scaling_factor"]
-                plants.loc[plants["scaling_factor"].notna(), "ef_12_lower"] *= plants.loc[plants["scaling_factor"].notna(), "scaling_factor"]
-                plants.loc[plants["scaling_factor"].notna(), "ef_12_upper"] *= plants.loc[plants["scaling_factor"].notna(), "scaling_factor"]
+                plants.loc[plants["scaling_factor"].notna(), "adj_ef_12"] *= plants.loc[plants["scaling_factor"].notna(), "scaling_factor"]
+                plants.loc[plants["scaling_factor"].notna(), "adj_ef_12_lower"] *= plants.loc[plants["scaling_factor"].notna(), "scaling_factor"]
+                plants.loc[plants["scaling_factor"].notna(), "adj_ef_12_upper"] *= plants.loc[plants["scaling_factor"].notna(), "scaling_factor"]
                 # Merge back to full dataframe to apply scaling factor across all years
                 plants.to_csv("baseline_2022.csv", index=False)
                 
@@ -89,7 +89,7 @@ class EmissionFactors:
                 
                 # 5. Update EF with scaled values
                 # Keep projected BF BOF wherever possible and fill missing values with constant EF from hasanbeigi
-                plants = plants.assign(EF=plants["ef_12"].fillna(plants["EF"]))
+                plants = plants.assign(EF=plants["adj_ef_12"].fillna(plants["EF"]))
                 
                 #  TODO: debug
                 plants.to_csv("plants_match_nat_huizhong.csv", index=False)
@@ -101,8 +101,8 @@ class EmissionFactors:
             # Source: World Steel Association
             plants.loc[plants["Main production process"] == "integrated (DRI)", "EF"] = 1.65
             if source == "huizhong":
-                plants = plants.assign(EF_12_lower=plants["ef_12_lower"].fillna(plants["EF"]),
-                                       EF_12_upper=plants["ef_12_upper"].fillna(plants["EF"]))
+                plants = plants.assign(EF_12_lower=plants["adj_ef_12_lower"].fillna(plants["EF"]),
+                                       EF_12_upper=plants["adj_ef_12_upper"].fillna(plants["EF"]))
         else:
             raise Exception
         
@@ -281,7 +281,7 @@ class EmissionFactors:
             valid_countries = pd.read_csv(self.wsa_path.parent.parent/"for_review"/"valid_ef_countries.csv")
             sub_ef = ef.loc[ef["Country"].isin(valid_countries["proj_ef_country"].tolist())]
             plants = pd.merge(plants,
-                            sub_ef[["year", "Country", "Main production process", "ef_12", "ef_12_lower", "ef_12_upper"]],
+                            sub_ef[["year", "Country", "Main production process", "adj_ef_12", "adj_ef_12_lower", "adj_ef_12_upper"]],
                             how='left',
                             on=["year", "Country", techno_col])
             # plants.rename(columns={"Huizhong_EF": "EF"}, inplace=True)
@@ -291,7 +291,7 @@ class EmissionFactors:
     
     def read_huizhong(self):
         """Read emission factors from Huizhong."""
-        huizhong = pd.read_csv(self.huizhong_path)
+        huizhong = pd.read_excel(self.huizhong_path, engine="calamine")
         huizhong = huizhong.assign(**{"Main production process": "integrated (BF)"})
         # TODO: mapping of ROW scope 2 and EU countries 
         # TODO: to fill missing values bc there are only the top 8 countries

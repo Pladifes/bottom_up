@@ -29,7 +29,7 @@ company_prod = "production/company_steel_production.xlsx"
 wsa = "emission_factors/EF_WSA.xlsx"
 jrc = "emission_factors/EF_JRC_22.xlsx"
 sci = "emission_factors/EF_SCI_22.xlsx"
-huizhong = "for_review/ef12_proj_huizhong.csv"
+huizhong = "for_review/ef12_proj_adj.xlsx"
 energy_mix = "energy_mix/global_energy_mix_2023.csv" 
 
 [mappings]
