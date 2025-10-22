@@ -8,6 +8,7 @@ from matplotlib.ticker import FuncFormatter
 import pickle
 from typing import Tuple
 import copy
+from tqdm import tqdm
 
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
@@ -644,7 +645,8 @@ def get_bu_proj_emissions(gspt,
                           start_year,
                           end_year,
                           method,
-                          cbudget):
+                          cbudget,
+                          use_country_techno_ur: bool = False):
 
     with open(parent_group_map_path, "r") as f:
         parent_group_map = json.load(f)
@@ -657,7 +659,8 @@ def get_bu_proj_emissions(gspt,
                                                             parent_group_map=parent_group_map,
                                                             glob_capa=glob_capa,
                                                             glob_prod=glob_prod_iea,
-                                                            base_bu_prod=glob_bu_prod)
+                                                            base_bu_prod=glob_bu_prod,
+                                                            use_country_techno_ur=use_country_techno_ur)
     elif method in ["company_UR", "company_UR_fuel_switch", "techno_UR"]: 
         proj_company, proj_plants = get_proj_BU_constant_ms(gspt=gspt, 
                             glob_prod_iea=glob_prod_iea,
@@ -1150,7 +1153,7 @@ def get_proj_BU_constant_ms(gspt: pd.DataFrame,
     return proj_company, proj_plants
 
 
-def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, parent_group_map, glob_capa, glob_prod, base_bu_prod: float):
+def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, parent_group_map, glob_capa, glob_prod, base_bu_prod: float, use_country_techno_ur: bool = False):
     """Return projected emissions where utilisation rates from 2021 are held constant
     for future plants. Granularity: (technology, country/region)
 
@@ -1171,29 +1174,58 @@ def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, pare
     prod_dir = raw_data_dir / "production"
     global_capa_path = raw_data_dir / "capacity" / "STI_STEEL_MAKINGCAPACITY_23112023172621215.csv"
     adj_factor_path = raw_data_dir / "adj_factor.xlsx"
-    all_country_ur = get_all_country_ur(start_year=2022,
-                                        end_year=2022,
-                                        prod_dir=prod_dir,
-                                        global_capa_path=global_capa_path)
-    # Adjust utilisation rates to match global production
-    adj_factor = pd.read_excel(adj_factor_path)
-    all_country_ur = pd.merge(all_country_ur,
-                              adj_factor,on="year",
-                              how="left")
-    all_country_ur["country UR"] = all_country_ur["country UR"] * all_country_ur['adj_factor']
-    # Enforce constraint that utilisation rates <= 100%
-    all_country_ur["country UR"] = all_country_ur["country UR"].clip(upper=1.0)
     
-    # (future) plants located in countries with missing UR in 2022
-    # are imputed the median UR
-    median_country_ur = all_country_ur['country UR'].median()
-    mergedf = pd.merge(op_plants,
-                        all_country_ur[["country", "country UR"]],
-                        left_on=["Country"],
-                        right_on=["country"], 
-                        how="left")
-    # unavailable UR for Hong Kong and Zimbabwe
-    # assign median UR for projections
+    if use_country_techno_ur:
+        # Import the function from plant_features
+        from src.feature_eng.plant_features import get_all_techno_ur
+        all_ur_data = get_all_techno_ur(start_year=2022,
+                                      end_year=2022,
+                                      prod_dir=prod_dir)
+        
+        # Merge with technology-specific UR data
+        mergedf = pd.merge(op_plants,
+                          all_ur_data[["country", "bof_country UR", "eaf_country UR"]],
+                          left_on=["Country"],
+                          right_on=["country"],
+                          how='left')
+        
+        # Assign UR based on technology
+        mergedf['country UR'] = np.where(mergedf['Main production process'] == 'electric', 
+                                        mergedf['eaf_country UR'], 
+                                        mergedf['bof_country UR'])
+        
+        # Clean up temporary columns
+        mergedf = mergedf.drop(columns=['bof_country UR', 'eaf_country UR'])
+        
+        # (future) plants located in countries with missing UR in 2022
+        # are imputed the median UR
+        median_country_ur = mergedf['country UR'].median()
+        mergedf['country UR'] = mergedf['country UR'].fillna(median_country_ur)
+    else:
+        all_country_ur = get_all_country_ur(start_year=2022,
+                                            end_year=2022,
+                                            prod_dir=prod_dir,
+                                            global_capa_path=global_capa_path)
+        # Adjust utilisation rates to match global production
+        adj_factor = pd.read_excel(adj_factor_path)
+        all_country_ur = pd.merge(all_country_ur,
+                                  adj_factor,on="year",
+                                  how="left")
+        all_country_ur["country UR"] = all_country_ur["country UR"] * all_country_ur['adj_factor']
+        # Enforce constraint that utilisation rates <= 100%
+        all_country_ur["country UR"] = all_country_ur["country UR"].clip(upper=1.0)
+        
+        # (future) plants located in countries with missing UR in 2022
+        # are imputed the median UR
+        median_country_ur = all_country_ur['country UR'].median()
+        mergedf = pd.merge(op_plants,
+                            all_country_ur[["country", "country UR"]],
+                            left_on=["Country"],
+                            right_on=["country"], 
+                            how="left")
+        # unavailable UR for Hong Kong and Zimbabwe
+        # assign median UR for projections
+        mergedf['country UR'] = mergedf['country UR'].fillna(median_country_ur)
     # assuming future plants will operate at nonzero UR
     mergedf = mergedf.rename(columns={"country UR": "UR crude steel"})
     mergedf["UR crude steel"] = mergedf["UR crude steel"].replace(0, np.nan)    
@@ -1219,6 +1251,21 @@ def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, pare
     # 2. PRODUCTION CONSTRAINT
     agg_prod = final_plants.groupby("year")['Estimated crude steel production (ttpa)'].sum().reset_index()
     
+    # Debug: Show production before scaling
+    print(f"\nDEBUG constant_UR: Production from capacity × UR (before scaling):")
+    for year in [2022, 2023, 2024, 2025, 2030]:
+        if year in agg_prod['year'].values:
+            prod_val = agg_prod.loc[agg_prod['year'] == year, 'Estimated crude steel production (ttpa)'].iloc[0]
+            print(f"  {year}: {prod_val/1e3:.1f} Mt")
+    
+    # Check capacity changes
+    agg_capa = final_plants.groupby("year")['Nominal crude steel capacity (ttpa)'].sum().reset_index()
+    print(f"\nDEBUG constant_UR: Aggregate capacity:")
+    for year in [2022, 2023, 2024]:
+        if year in agg_capa['year'].values:
+            capa_val = agg_capa.loc[agg_capa['year'] == year, 'Nominal crude steel capacity (ttpa)'].iloc[0]
+            print(f"  {year}: {capa_val/1e3:.1f} Mt")
+    
     # yearly production values based on 2022 and 2030 values
     iea_prod = pd.DataFrame({"year": range(2022, 2031)})
     #iea_prod.loc[iea_prod["year"] == 2022, "production"] = glob_prod.loc[glob_prod["Year"] == 2022, "Industrial production (Mt)"].iloc[0] * 1E3
@@ -1227,6 +1274,7 @@ def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, pare
     iea_prod['production'] = iea_prod['production'].interpolate(method="linear")
     
     # compare bu prod with scenario prod
+    print(f"\nDEBUG constant_UR: Checking if production scaling is needed:")
     for year in agg_prod['year'].tolist():
         # aggregate BU production for a given year
         bu_year_prod = agg_prod.loc[agg_prod['year'] == year, "Estimated crude steel production (ttpa)"].iloc[0]
@@ -1234,16 +1282,25 @@ def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, pare
         iea_year_prod = iea_prod.loc[iea_prod['year'] == year, "production"].iloc[0] 
         if bu_year_prod <= iea_year_prod:
             # no adjustment required
-            pass
+            print(f"  {year}: No scaling needed (BU: {bu_year_prod/1e3:.1f} Mt ≤ IEA: {iea_year_prod/1e3:.1f} Mt)")
         else:
             # ADJUST UR in order for bottom-up production to match scenario production
             # calculate adjustment factor
             alpha = iea_year_prod / bu_year_prod
+            print(f"  {year}: ⚠️  Scaling URs by {alpha:.3f} (BU: {bu_year_prod/1e3:.1f} Mt → IEA: {iea_year_prod/1e3:.1f} Mt)")
             # Discount old UR for each plant using above alpha
             final_plants.loc[final_plants['year'] == year, 'UR crude steel'] = alpha * final_plants.loc[final_plants['year'] == year,'UR crude steel']
             
     # Recalculate plant production accordingly
     final_plants['Estimated crude steel production (ttpa)'] = final_plants["Nominal crude steel capacity (ttpa)"] * final_plants["UR crude steel"]
+    
+    # Debug: Show production after scaling
+    agg_prod_after = final_plants.groupby("year")['Estimated crude steel production (ttpa)'].sum().reset_index()
+    print(f"\nDEBUG constant_UR: Production after UR scaling:")
+    for year in [2022, 2023, 2024, 2025, 2030]:
+        if year in agg_prod_after['year'].values:
+            prod_val = agg_prod_after.loc[agg_prod_after['year'] == year, 'Estimated crude steel production (ttpa)'].iloc[0]
+            print(f"  {year}: {prod_val/1e3:.1f} Mt")
             
     # calculate emissions
     final_plants['Emissions (Gt)'] = final_plants['Estimated crude steel production (ttpa)'] * final_plants['EF'] / 1e6
@@ -1276,7 +1333,7 @@ def shutdown_plants_hyp01(plants, glob_capa, start_year, end_year):
     final_plants = pd.DataFrame()
     removed_plants = pd.DataFrame()
     
-    for year in range(start_year, end_year+1):
+    for year in tqdm(range(start_year, end_year+1)):
         # capacity in thousand of tonnes
         bu_capa = float(agg_capa.loc[agg_capa['year'] == year, "Nominal crude steel capacity (ttpa)"])
         oecd_capa = float(glob_capa.loc[glob_capa['year'] == year, "Global capacity (Mt)"]) * 1e3
@@ -1296,20 +1353,37 @@ def shutdown_plants_hyp01(plants, glob_capa, start_year, end_year):
             bf_plants = bf_plants.sort_values(by="Start year", ascending=True)
             
             # while bu capa >= oecd capa: remove old bf plants
-            i = 1
-            while bu_capa > oecd_capa:
+            i = 0
+            num_bf_plants = len(bf_plants)
+            print(f"DEBUG: Year {year} - Need to reduce capacity from {bu_capa:.2f} to {oecd_capa:.2f} ttpa")
+            print(f"DEBUG: Number of BF plants available: {num_bf_plants}")
+            
+            selected_bf = bf_plants  # Initialize with all BF plants
+            while bu_capa > oecd_capa and i < num_bf_plants:
+                i += 1
                 selected_bf = bf_plants.iloc[i:]
                 # merge not BF with selected BF plants
                 selected_plants = pd.concat([selected_bf, not_bf_plants], axis=0, ignore_index=True)
                 # update bu capacity
                 bu_capa = selected_plants['Nominal crude steel capacity (ttpa)'].sum()
-                i+=1
+                print(f"DEBUG: Iteration {i}: Removed {i} BF plant(s), remaining capacity: {bu_capa:.2f} ttpa")
+            
+            # Final selected plants after the loop
+            selected_plants = pd.concat([selected_bf, not_bf_plants], axis=0, ignore_index=True)
+            
+            # If we still exceed capacity after removing all BF plants, log a warning
+            if bu_capa > oecd_capa:
+                print(f"WARNING: Year {year} - Cannot reduce capacity below OECD limit even after removing all BF plants")
+                print(f"  - BU capacity: {bu_capa:.2f} ttpa")
+                print(f"  - OECD capacity: {oecd_capa:.2f} ttpa")
+                print(f"  - Excess: {bu_capa - oecd_capa:.2f} ttpa")
 
             # remove plants that shutdown for future years
-            plants_to_remove = bf_plants.loc[bf_plants.index[:i], "Plant ID"]
-            plants = plants.loc[~plants["Plant ID"].isin(plants_to_remove)]
-            removed_df = bf_plants.loc[bf_plants['Plant ID'].isin(plants_to_remove)]
-            removed_plants = pd.concat([removed_plants, removed_df], ignore_index=True, axis=0)
+            if i > 0:
+                plants_to_remove = bf_plants.iloc[:i]["Plant ID"]
+                plants = plants.loc[~plants["Plant ID"].isin(plants_to_remove)]
+                removed_df = bf_plants.iloc[:i]
+                removed_plants = pd.concat([removed_plants, removed_df], ignore_index=True, axis=0)
             
             # concat final operating plants 
             final_plants = pd.concat([final_plants, selected_plants], ignore_index=True, axis=0)
@@ -1468,22 +1542,49 @@ def get_historical_bu_emissions(gspt: GSPTDataset,
                                 parent_group_map: dict,
                                 model: "sklearn.Pipeline",
                                 gspt2gspt_path: Path,
+                                use_country_techno_ur: bool = False,
                                 ):
     assert start_year >= 2018
     
     wsa_prod = pd.read_excel(global_prod_wsa_path)
     
-    all_country_ur = get_all_country_ur(start_year=start_year,
-                                    end_year=end_year,
-                                    prod_dir=prod_dir,
-                                    global_capa_path=global_capa_path)
+    if use_country_techno_ur:
+        # Import the function from plant_features
+        from src.feature_eng.plant_features import get_all_techno_ur
+        techno_capa_path = prod_dir.parent / "capacity" / "country_techno_capa.xlsx"
+        all_ur_data = get_all_techno_ur(start_year=start_year,
+                                      end_year=end_year,
+                                      prod_dir=prod_dir)
+        
+        plants = gspt.get_operating_plants(start_year=start_year, end_year=end_year)
+        
+        # Merge with technology-specific UR data
+        prod = pd.merge(plants,
+                all_ur_data[["year", "country", "bof_country UR", "eaf_country UR"]],
+                left_on=['year', "Country"],
+                right_on=["year", "country"],
+                how='left')
+        
+        # Assign UR based on technology
+        prod['country UR'] = np.where(prod['Main production process'] == 'electric', 
+                                    prod['eaf_country UR'], 
+                                    prod['bof_country UR'])
+        
+        # Clean up temporary columns
+        prod = prod.drop(columns=['bof_country UR', 'eaf_country UR'])
+    else:
+        all_country_ur = get_all_country_ur(start_year=start_year,
+                                        end_year=end_year,
+                                        prod_dir=prod_dir,
+                                        global_capa_path=global_capa_path)
+        
+        plants = gspt.get_operating_plants(start_year=start_year, end_year=end_year)
+        prod = pd.merge(plants,
+                all_country_ur[["year", "country", "country UR"]],
+                left_on=['year', "Country"],
+                right_on=["year", "country"],
+                how='left')
     
-    plants = gspt.get_operating_plants(start_year=start_year, end_year=end_year)
-    prod = pd.merge(plants,
-            all_country_ur[["year", "country", "country UR"]],
-            left_on=['year', "Country"],
-            right_on=["year", "country"],
-            how='left')
     assert len(plants) == len(prod)
     
     # GSPT Capacity/Production is < 100%
@@ -1531,6 +1632,10 @@ def get_historical_bu_emissions(gspt: GSPTDataset,
                                                     "Attributed capacity (ttpa)": "sum"})
     group["Attributed emissions"] = group["Attributed emissions (ttpa)"] * 1e3
     group["Attributed production"] = group["Attributed production (ttpa)"] * 1e3
+    # TODO: temporary check
+    print(f"Removing {(group['Attributed emissions'] == 0).sum()/len(group)} rows with zero emissions")
+    group = group.loc[group["Attributed emissions"] != 0]
+    # TODO: temp check
     group['log_Attributed emissions'] = np.log(group["Attributed emissions"])
     group['log_Attributed production'] = np.log(group["Attributed production"])
     group["elec_int_capa"] = group["country_elec_int"].copy()

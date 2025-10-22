@@ -60,6 +60,7 @@ class ParamsConfig(BaseModel):
     scenario_level: str
     model_name: str
     EAF_decarb: bool
+    use_country_techno_ur: bool
 
 class Config(BaseModel):
     params: ParamsConfig

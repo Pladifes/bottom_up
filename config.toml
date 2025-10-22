@@ -6,6 +6,7 @@ scenario = "iea"
 scenario_level = "region"
 model_name = "BU_single_OLS"
 EAF_decarb = true
+use_country_techno_ur = true  # Set to true to use country_techno UR instead of country UR
 
 [historical_data]
 version_year = 2023

@@ -1,6 +1,6 @@
 import pandas as pd
 
-def get_all_techno_ur(start_year, end_year, prod_dir, techno_capa_path):
+def get_all_techno_ur_old(start_year, end_year, prod_dir, techno_capa_path):
     """Get country/techno level utilisation rates for specified years,
     based on WSA reports.
 
@@ -58,6 +58,214 @@ def get_all_techno_ur(start_year, end_year, prod_dir, techno_capa_path):
     melt_techno['country UR'] = melt_techno['techno_share'] * (melt_techno["Production (Mt)"] * 1e3) / melt_techno['Nominal crude steel capacity (ttpa)']
     
     return melt_techno
+
+def get_all_techno_ur(start_year, end_year, prod_dir):
+    """Get country/techno level utilisation rates for specified years,
+    reading from new data files in data/raw/for_review.
+    
+    This function combines:
+    1. Country-techno URs (separate BOF and EAF URs) where available
+    2. Country-only URs (aggregate UR applied to both BOF and EAF) for other countries
+    
+    This ensures complete coverage of all countries in the dataset.
+
+    Args:
+        start_year (_type_): _description_
+        end_year (_type_): _description_
+        prod_dir (_type_): bottom_up_alignment/data/raw/production (used to determine base path)
+
+    Returns:
+        pd.DataFrame: (year, country, bof_country UR, eaf_country UR) for ALL countries
+    """
+    from pathlib import Path
+    
+    # Determine the base data directory
+    data_dir = Path(prod_dir).parent / "for_review"
+    
+    # Check if files exist
+    shares_file = data_dir / "steel_capacity_production_shares.xlsx"
+    ur_file = data_dir / "all_country_ur.xlsx"
+    
+    if not shares_file.exists():
+        raise FileNotFoundError(f"Required file not found: {shares_file}")
+    if not ur_file.exists():
+        raise FileNotFoundError(f"Required file not found: {ur_file}")
+    
+    print(f"Loading country-techno UR data from {data_dir}")
+    
+    # Read the two files
+    steel_capacity_shares = pd.read_excel(shares_file, engine="calamine").rename(columns={"Country": "country"})
+    all_country_ur = pd.read_excel(ur_file, engine="calamine")
+    
+    print(f"  - Loaded steel_capacity_production_shares: {steel_capacity_shares.shape}")
+    print(f"  - Loaded all_country_ur: {all_country_ur.shape}")
+    
+    # Rename Türkiye to Turkey in all_country_ur
+    all_country_ur['country'] = all_country_ur['country'].replace("Türkiye", "Turkey")
+    
+    # Get unique countries and years from both files
+    countries_shares = set(steel_capacity_shares['country'].unique())
+    countries_ur = set(all_country_ur['country'].unique())
+    years_shares = set(steel_capacity_shares['year'].unique())
+    years_ur = set(all_country_ur['year'].unique())
+    
+    # Check for differences in countries
+    countries_only_in_shares = countries_shares - countries_ur
+    countries_only_in_ur = countries_ur - countries_shares
+    
+    # Check for differences in years
+    years_only_in_shares = years_shares - years_ur
+    years_only_in_ur = years_ur - years_shares
+    
+    # Warn if countries don't match
+    if countries_shares != countries_ur:
+        print("WARNING: Countries mismatch detected!")
+        if countries_only_in_shares:
+            print(f"  Countries only in steel_capacity_production_shares.xlsx: {sorted(countries_only_in_shares)}")
+        if countries_only_in_ur:
+            print(f"  Countries only in all_country_ur.xlsx: {sorted(countries_only_in_ur)}")
+    
+    # Warn if years don't match
+    if years_shares != years_ur:
+        print("WARNING: Years mismatch detected!")
+        if years_only_in_shares:
+            print(f"  Years only in steel_capacity_production_shares.xlsx: {sorted(years_only_in_shares)}")
+        if years_only_in_ur:
+            print(f"  Years only in all_country_ur.xlsx: {sorted(years_only_in_ur)}")
+    
+    # Merge on country and year columns using left join
+    merged_data = pd.merge(
+        steel_capacity_shares,
+        all_country_ur,
+        on=['country', 'year'],
+        how='left'
+    )
+    
+    # Compute bof_country UR and eaf_country UR
+    merged_data['bof_country UR'] = (
+        merged_data['bof_share_prod'] * merged_data['country production (mt)']
+    ) / (
+        merged_data['bof_share_capa'] * merged_data['country capacity (mt)']
+    )
+    
+    merged_data['eaf_country UR'] = (
+        merged_data['eaf_share_prod'] * merged_data['country production (mt)']
+    ) / (
+        merged_data['eaf_share_capa'] * merged_data['country capacity (mt)']
+    )
+    
+    # Imputation for bof_country UR
+    # If capacity share is zero, impute with country UR
+    bof_zero_capa_mask = merged_data['bof_share_capa'] == 0
+    merged_data.loc[bof_zero_capa_mask, 'bof_country UR'] = merged_data.loc[bof_zero_capa_mask, 'country UR']
+    
+    # If production share is missing, impute with country UR
+    bof_missing_prod_mask = merged_data['bof_share_prod'].isna()
+    merged_data.loc[bof_missing_prod_mask, 'bof_country UR'] = merged_data.loc[bof_missing_prod_mask, 'country UR']
+    
+    # Imputation for eaf_country UR
+    # If capacity share is zero, impute with country UR
+    eaf_zero_capa_mask = merged_data['eaf_share_capa'] == 0
+    merged_data.loc[eaf_zero_capa_mask, 'eaf_country UR'] = merged_data.loc[eaf_zero_capa_mask, 'country UR']
+    
+    # If production share is missing, impute with country UR
+    eaf_missing_prod_mask = merged_data['eaf_share_prod'].isna()
+    merged_data.loc[eaf_missing_prod_mask, 'eaf_country UR'] = merged_data.loc[eaf_missing_prod_mask, 'country UR']
+    
+    # In cases of overproduction, we cap UR at 1
+    merged_data['bof_country UR'] = merged_data['bof_country UR'].clip(upper=1.0)
+    merged_data['eaf_country UR'] = merged_data['eaf_country UR'].clip(upper=1.0)
+    
+    # Filter for the requested year range (all years from start_year to end_year)
+    years_range = list(range(start_year, end_year + 1))
+    filtered_data = merged_data.loc[merged_data['year'].isin(years_range)].copy()
+    
+    # Debug: Check if we have data
+    if filtered_data.empty:
+        raise ValueError(f"No data found for years {years_range}. Available years: {sorted(merged_data['year'].unique())}")
+    
+    # Get countries that have techno-specific URs
+    countries_with_techno_ur = set(filtered_data['country'].unique())
+    
+    # Debug: Check year coverage in techno-specific data
+    print("\nDEBUG: Techno-specific UR coverage by year:")
+    for year in years_range:
+        year_countries = filtered_data[filtered_data['year'] == year]['country'].nunique()
+        print(f"  Year {year}: {year_countries} countries")
+    
+    # Now get ALL countries from country-level UR data (for countries without techno-specific URs)
+    # This ensures we have URs for all countries, not just those with techno breakdowns
+    print("\nDEBUG: Loading country-only UR data to fill missing countries...")
+    
+    # Determine global capacity path
+    global_capa_path = Path(prod_dir).parent / "capacity" / "STI_STEEL_MAKINGCAPACITY_23112023172621215.csv"
+    
+    # Get country-level URs for all countries
+    all_country_only_ur = get_all_country_ur(start_year=start_year,
+                                              end_year=end_year,
+                                              prod_dir=prod_dir,
+                                              global_capa_path=global_capa_path)
+    
+    # Filter for years in range
+    all_country_only_ur = all_country_only_ur.loc[all_country_only_ur['year'].isin(years_range)].copy()
+    
+    # Debug: Check year coverage in country-only data
+    print("DEBUG: Country-only UR coverage by year:")
+    for year in years_range:
+        year_countries = all_country_only_ur[all_country_only_ur['year'] == year]['country'].nunique()
+        print(f"  Year {year}: {year_countries} countries")
+    
+    # Identify countries that DON'T have techno-specific URs (per year)
+    # We need to do this per year because coverage might differ
+    combined_data_list = [filtered_data]
+    
+    for year in years_range:
+        techno_countries_year = set(filtered_data[filtered_data['year'] == year]['country'].unique())
+        country_only_year = all_country_only_ur[all_country_only_ur['year'] == year].copy()
+        country_only_countries_year = set(country_only_year['country'].unique())
+        
+        # Countries in country-only data but not in techno data for this year
+        missing_in_techno = country_only_countries_year - techno_countries_year
+        
+        if missing_in_techno:
+            print(f"  Year {year}: Adding {len(missing_in_techno)} countries from country-only data")
+            
+            # Get data for these countries
+            country_ur_to_add = country_only_year[country_only_year['country'].isin(missing_in_techno)].copy()
+            
+            # Duplicate country UR into both bof_country UR and eaf_country UR
+            country_ur_to_add['bof_country UR'] = country_ur_to_add['country UR']
+            country_ur_to_add['eaf_country UR'] = country_ur_to_add['country UR']
+            
+            combined_data_list.append(country_ur_to_add)
+    
+    # Concatenate all data
+    combined_data = pd.concat(combined_data_list, axis=0, ignore_index=True)
+    
+    # Final summary
+    countries_with_techno_ur = set(filtered_data['country'].unique())
+    countries_added_from_country_ur = set(combined_data['country'].unique()) - countries_with_techno_ur
+    
+    print("\nDEBUG: Summary:")
+    print(f"  - Countries with techno-specific URs: {len(countries_with_techno_ur)}")
+    print(f"  - Countries added from country-level URs: {len(countries_added_from_country_ur)}")
+    
+    # Final year-by-year summary
+    print("\nDEBUG: Final combined data by year:")
+    for year in years_range:
+        year_countries = combined_data[combined_data['year'] == year]['country'].nunique()
+        print(f"  Year {year}: {year_countries} countries")
+    
+    print("\nDEBUG get_all_techno_ur: Returning combined wide format data")
+    print(f"  - Total shape: {combined_data.shape}")
+    print(f"  - Years: {sorted(combined_data['year'].unique())}")
+    print(f"  - Total unique countries across all years: {len(combined_data['country'].unique())}")
+    print("  - Columns include: bof_country UR, eaf_country UR, country UR")
+    
+    # Return the WIDE format (not melted)
+    # This preserves compatibility with other code that uses this function
+    # Melting will be done only where needed (e.g., in GSPTDataset)
+    return combined_data
 
 def get_all_country_ur(start_year, end_year, prod_dir, global_capa_path):
     """Get country level utilisation rates for specified years,
@@ -330,3 +538,30 @@ def filter_capa(capa_df: str, level: str) -> pd.DataFrame:
     else:
         raise Exception
     return filtered_df
+
+
+if __name__ == "__main__":
+    from pathlib import Path
+    
+    # Set up paths
+    project_dir = Path(__file__).parent.parent.parent
+    prod_dir = project_dir / "data" / "raw" / "production"
+    
+    # Test the new get_all_techno_ur function
+    print("Testing get_all_techno_ur function...")
+    result = get_all_techno_ur(
+        start_year=2019,
+        end_year=2022,
+        prod_dir=prod_dir
+    )
+    
+    print(f"\nResult shape: {result.shape}")
+    print(f"\nColumns: {result.columns.tolist()}")
+    print(f"\nFirst few rows:\n{result.head()}")
+    print(f"\nUnique countries: {sorted(result['country'].unique())}")
+    print(f"\nUnique years: {sorted(result['year'].unique())}")
+    
+    # Save to Excel for inspection
+    output_path = project_dir / "data" / "raw" / "for_review" / "all_country_techno_ur.xlsx"
+    result.to_excel(output_path, index=False)
+    print(f"\nResult saved to: {output_path}")

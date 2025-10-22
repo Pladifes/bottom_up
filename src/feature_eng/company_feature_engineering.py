@@ -26,7 +26,7 @@ def get_X_y(gspt,
             refinitiv,
             gspt2cdp,
             cdp):
-    """Get training set (2019-2021) for group companies. Some companies are currently labeled as outliers
+    """Get training set (2019-2022) for group companies. Some companies are currently labeled as outliers
     since there seems to be a matching issue between bottom-up and top-down (share of steel activity in overall portfolio?,
     or unidentified plants or subsidiaries?)
 
@@ -39,8 +39,9 @@ def get_X_y(gspt,
     Returns:
         _type_: _description_
     """
-    years = [2019,2020, 2021]
-    panel = gspt.get_panel_data(years=years, entity="country", impute_prod=impute_prod, average=average)
+    years = [2019, 2020, 2021, 2022]
+    # Use "techno" entity to get country-techno level utilization rates (more granular than just country-level)
+    panel = gspt.get_panel_data(years=years, entity="techno", impute_prod=impute_prod, average=average)
     X_y = get_features(dataset=panel,
                 EF=EF,
                 energy_mix_path=energy_mix_path,

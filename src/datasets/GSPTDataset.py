@@ -137,13 +137,21 @@ class GSPTDataset:
         will not add up to global capacity. Instead, look at attributed capacity.
 
         Args:
-            year (int): [2019, 2020]
+            year (int): [2019, 2020, 2021, 2022] - supports up to 2022 with estimated URs
             impute_prod (str): impute production values method
 
         Returns:
             pd.DataFrame: plant level dataset melted on company column
         """
-        dataset = self.get_merged_capacity_prod(year=year)
+        # For 2022 (and years beyond prod_years), use estimated production with URs
+        # For entity="techno" or "country", URs are available for 2022
+        if year in self.prod_years:
+            dataset = self.get_merged_capacity_prod(year=year)
+        else:
+            # For 2022: use capacity data with estimated URs
+            dataset = self.get_operating_plants(start_year=year)
+            dataset["year"] = year
+        
         # PLANT LEVEL FEATURES
         # impute Utilization rate at impute_prod level
         dataset["Estimated UR crude steel"] = self.get_estimated_UR(capa_prod=dataset, 
@@ -283,21 +291,81 @@ class GSPTDataset:
         if entity == "techno":
             raw_data_dir = self.data_path.parent
             prod_dir = raw_data_dir / "production"
-            techno_capa_path = raw_data_dir / "capacity" / "country_techno_capa.xlsx"
-            all_country_ur = get_all_techno_ur(start_year=2019,
+            # Use the new get_all_techno_ur function that reads from for_review/ directory
+            # This returns WIDE format with separate bof_country UR and eaf_country UR columns
+            all_country_ur_wide = get_all_techno_ur(start_year=2019,
                                                 end_year=2022,
-                                                prod_dir=prod_dir,
-                                                techno_capa_path=techno_capa_path
+                                                prod_dir=prod_dir
                                                 )
             
+            # Apply country name mapping to match GSPT country names
+            # This ensures the UR data countries match the GSPT countries
+            ur_to_gspt_countries = {
+                # Already handled in get_all_techno_ur: "Türkiye": "Turkey"
+                "Turkey": "Türkiye",
+                "Taiwan, China": "Taiwan",
+                "Czechia": "Czech Republic",
+                "Slovak Republic": "Slovakia",
+                "Macedonia": "North Macedonia",
+                "Byelorussia": "Belarus",
+                "Viet Nam": "Vietnam",
+                "D.P.R. Korea": "North Korea",
+                "Korea": "South Korea",
+                "Korea, Republic of": "South Korea",
+                "Chinese Taipei": "Taiwan",
+                "Syrian Arab Republic": "Syria",
+                "Democratic People's Republic of Korea": "North Korea",
+                "China (People's Republic of)": "China",
+                "United States of America": "United States",
+                "Iran, Islamic Republic of": "Iran",
+                "Venezuela, Bolivarian Republic of": "Venezuela",
+                "Russian Federation": "Russia",
+                "Viet Nam": "Vietnam",
+                "Philippines (the)": "Philippines",
+                "United Kingdom of Great Britain and Northern Ireland": "United Kingdom"
+            }
+            all_country_ur_wide['country'] = all_country_ur_wide['country'].replace(ur_to_gspt_countries)
+            
+            # Melt the wide format to long format for merging with GSPT
+            # Transform from (country, year, bof_country UR, eaf_country UR)
+            # to (Country, year, Main production process, country UR)
+            all_country_ur_melted = all_country_ur_wide.melt(
+                id_vars=['country', 'year'],
+                value_vars=['bof_country UR', 'eaf_country UR'],
+                var_name='Main production process',
+            ).rename(columns={"country": "Country", "value": "country UR"})
+            all_country_ur_melted = all_country_ur_melted.assign(**{"Main production process": all_country_ur_melted["Main production process"].replace({"bof_country UR": "integrated (BF)", "eaf_country UR": "electric"})})
+            
+            # Debug: Check for countries that didn't match
+            gspt_countries = set(capa_prod['Country'].unique())
+            ur_countries = set(all_country_ur_melted['Country'].unique())
+            unmatched_gspt = gspt_countries - ur_countries
+            unmatched_ur = ur_countries - gspt_countries
+            
+            if unmatched_gspt:
+                print(f"WARNING: {len(unmatched_gspt)} GSPT countries not found in UR data:")
+                print(f"  {sorted(list(unmatched_gspt)[:10])}{'...' if len(unmatched_gspt) > 10 else ''}")
+            if unmatched_ur:
+                print(f"WARNING: {len(unmatched_ur)} UR countries not found in GSPT:")
+                print(f"  {sorted(list(unmatched_ur)[:10])}{'...' if len(unmatched_ur) > 10 else ''}")
+            
+            # Now merge with plant data
             plants_ur = pd.merge(capa_prod,
-                                all_country_ur[["Year", "Country_gspt", "country UR", "Main production process"]],
-                                left_on=["year", "Country", "Main production process"],
-                                right_on=["Year", "Country_gspt", "Main production process"], 
+                                all_country_ur_melted[["year", "Country", "country UR", "Main production process"]],
+                                on=["year", "Country", "Main production process"],
                                 how="left")
             plants_ur = plants_ur.rename(columns={"country UR": "UR crude steel"})
+            
+            # Report on missing URs (no fallback - let the user decide what to do)
+            missing_ur_mask = plants_ur["UR crude steel"].isna()
+            if missing_ur_mask.sum() > 0:
+                print(f"\nWARNING: {missing_ur_mask.sum()} plants have missing URs after merge.")
+                missing_countries = plants_ur.loc[missing_ur_mask, 'Country'].unique()
+                print(f"  Countries with missing URs: {sorted(missing_countries)}")
+                print(f"  Add these countries to the 'ur_to_gspt_countries' mapping if needed.")
+            
             UR_col = plants_ur["UR crude steel"]
-            ur_df = all_country_ur
+            ur_df = all_country_ur_wide
         elif entity == "country":
             raw_data_dir = self.data_path.parent
             prod_dir = raw_data_dir / "production"
