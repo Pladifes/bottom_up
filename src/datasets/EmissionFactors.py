@@ -62,7 +62,10 @@ class EmissionFactors:
                 plants = self.map_national_ef(plants=plants, efs=efs, source=source, techno_col=techno_col)
                 # 
                 plants = self.map_national_ef(plants=plants, efs=efs, source="sci", techno_col=techno_col)
-                
+                # TODO: copy upper with sci
+                plants = plants.assign(EF_12_upper=plants["EF"])
+                # Historical DRI EF
+                plants.loc[plants["Main production process"] == "integrated (DRI)", "EF_12_upper"] = 1.65
                 # Rescale huizhong time series to anchor to SCI 2022 baseline
                 # This avoids discontinuity between historical (SCI) and projected (huizhong) values
                 
@@ -101,8 +104,9 @@ class EmissionFactors:
             # Source: World Steel Association
             plants.loc[plants["Main production process"] == "integrated (DRI)", "EF"] = 1.65
             if source == "huizhong":
-                plants = plants.assign(EF_12_lower=plants["adj_ef_12_lower"].fillna(plants["EF"]),
-                                       EF_12_upper=plants["adj_ef_12_upper"].fillna(plants["EF"]))
+                plants = plants.assign(EF_12_lower=plants["adj_ef_12_lower"].fillna(plants["EF"]),)
+                                    #    EF_12_upper=plants["adj_ef_12_upper"].fillna(plants["EF"]))
+                # plants = pla
         else:
             raise Exception
         

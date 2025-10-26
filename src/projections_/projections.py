@@ -1149,7 +1149,7 @@ def get_proj_BU_constant_ms(gspt: pd.DataFrame,
                                                                                             "Estimated emissions (ttpa)": "sum"}).reset_index()
     proj_plants['Emissions (Gt)'] = proj_plants["Estimated emissions (ttpa)"] / 1e6
     
-    # 
+    # TODO: add 'Emissions_low (Gt)' and 'Emissions_high (Gt)' to proj_plants
     return proj_company, proj_plants
 
 
@@ -1199,8 +1199,18 @@ def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, pare
         
         # (future) plants located in countries with missing UR in 2022
         # are imputed the median UR
-        median_country_ur = mergedf['country UR'].median()
-        mergedf['country UR'] = mergedf['country UR'].fillna(median_country_ur)
+        mergedf["country UR"] = mergedf["country UR"].replace(0, np.nan) 
+        # Calculate median UR by technology
+        median_bf_ur = mergedf.loc[mergedf['Main production process'] == 'integrated (BF)', 'country UR'].median()
+        median_eaf_ur = mergedf.loc[mergedf['Main production process'] == 'electric', 'country UR'].median()
+        median_ur = mergedf['country UR'].median()
+
+        # Fill missing values based on technology
+        mergedf.loc[mergedf['Main production process'] == 'integrated (BF)', 'country UR'] = \
+            mergedf.loc[mergedf['Main production process'] == 'integrated (BF)', 'country UR'].fillna(median_bf_ur)
+        mergedf.loc[mergedf['Main production process'] == 'electric', 'country UR'] = \
+            mergedf.loc[mergedf['Main production process'] == 'electric', 'country UR'].fillna(median_eaf_ur)
+        mergedf["country UR"] = mergedf["country UR"].fillna(median_ur)
     else:
         all_country_ur = get_all_country_ur(start_year=2022,
                                             end_year=2022,
@@ -1225,12 +1235,11 @@ def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, pare
                             how="left")
         # unavailable UR for Hong Kong and Zimbabwe
         # assign median UR for projections
+        mergedf["UR crude steel"] = mergedf["UR crude steel"].replace(0, np.nan)    
         mergedf['country UR'] = mergedf['country UR'].fillna(median_country_ur)
     # assuming future plants will operate at nonzero UR
     mergedf = mergedf.rename(columns={"country UR": "UR crude steel"})
-    mergedf["UR crude steel"] = mergedf["UR crude steel"].replace(0, np.nan)    
-    mergedf["UR crude steel"] = mergedf["UR crude steel"].fillna(median_country_ur)
-        
+            
     assert mergedf["UR crude steel"].between(0,1).all()
     
     # impute emission factors
@@ -1280,16 +1289,13 @@ def get_proj_BU_constant_UR(gspt, EF, start_year, end_year, gspt2gspt_path, pare
         bu_year_prod = agg_prod.loc[agg_prod['year'] == year, "Estimated crude steel production (ttpa)"].iloc[0]
         # scenario production for a given year
         iea_year_prod = iea_prod.loc[iea_prod['year'] == year, "production"].iloc[0] 
-        if bu_year_prod <= iea_year_prod:
-            # no adjustment required
-            print(f"  {year}: No scaling needed (BU: {bu_year_prod/1e3:.1f} Mt ≤ IEA: {iea_year_prod/1e3:.1f} Mt)")
-        else:
-            # ADJUST UR in order for bottom-up production to match scenario production
-            # calculate adjustment factor
-            alpha = iea_year_prod / bu_year_prod
-            print(f"  {year}: ⚠️  Scaling URs by {alpha:.3f} (BU: {bu_year_prod/1e3:.1f} Mt → IEA: {iea_year_prod/1e3:.1f} Mt)")
-            # Discount old UR for each plant using above alpha
-            final_plants.loc[final_plants['year'] == year, 'UR crude steel'] = alpha * final_plants.loc[final_plants['year'] == year,'UR crude steel']
+
+        # ADJUST UR in order for bottom-up production to match scenario production
+        # calculate adjustment factor
+        alpha = iea_year_prod / bu_year_prod
+        print(f"  {year}: ⚠️  Scaling URs by {alpha:.3f} (BU: {bu_year_prod/1e3:.1f} Mt → IEA: {iea_year_prod/1e3:.1f} Mt)")
+        # Discount old UR for each plant using above alpha
+        final_plants.loc[final_plants['year'] == year, 'UR crude steel'] = alpha * final_plants.loc[final_plants['year'] == year,'UR crude steel']
             
     # Recalculate plant production accordingly
     final_plants['Estimated crude steel production (ttpa)'] = final_plants["Nominal crude steel capacity (ttpa)"] * final_plants["UR crude steel"]

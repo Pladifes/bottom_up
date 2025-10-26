@@ -97,11 +97,14 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
     
     plots_data_dir = save_file / "plots_data"
     plots_data_dir.mkdir(parents=True, exist_ok=True)
+    plant_data_dir = save_file / "plant_level_data"
+    plant_data_dir.mkdir(parents=True, exist_ok=True)
     models_dir = save_file / "models"
     
     typer.echo(f"Main plots will be saved to {plots_dir}")
     typer.echo(f"Debug plots will be saved to {debug_dir}")
     typer.echo(f"Plot data will be saved to {plots_data_dir}")
+    typer.echo(f"Plant-level data will be saved to {plant_data_dir}")
     
     # Load datasets
     typer.echo("Loading GSPT dataset...")
@@ -418,6 +421,7 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
             
             # Apply EAF decarbonization if enabled
             if params.EAF_decarb:
+                # TODO: get regional slopes for APS and STEPS
                 # Use scenario-specific electricity intensity targets for 2030
                 base_all = 460  # 2022 global electricity intensity (g CO2/kWh)
                 # 2030 targets from IEA WEO (g CO2/kWh)
@@ -454,8 +458,11 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
                 
                 # Apply CAGR to uncertainty bounds if they exist
                 if "EF_12_lower" in proj_plants.columns:
+                    # TODO: get regional slopes for APS and STEPS
+                    # TODO: EF_12_lower = EF_12_upper = EF_histo, which is a bug?
                     proj_plants["EF_12_lower"] = proj_plants["EF_12_lower"] * proj_plants["EAF_CAGR"]
-                    proj_plants["EF_12_upper"] = proj_plants["EF_12_upper"] * proj_plants["EAF_CAGR"]
+                    # TODO: EF_12_upper should be EF_histo which is the case by default
+                    # proj_plants["EF_12_upper"] = proj_plants["EF_12_upper"] * proj_plants["EAF_CAGR"]
                     # Update emissions bounds with adjusted EF
                     proj_plants["Emissions_low (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_lower"] / 1E6
                     proj_plants["Emissions_high (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_upper"] / 1E6
@@ -465,6 +472,12 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
                 
                 # Clean up temporary column
                 proj_plants = proj_plants.drop(columns=["EAF_CAGR"])
+            
+            # Save plant-level data before aggregation
+            plant_filename = f"nze_{elec_source_name.lower()}_elec_{method}_plants.xlsx"
+            plant_filepath = plant_data_dir / plant_filename
+            proj_plants.to_excel(plant_filepath, index=False)
+            typer.echo(f"      ✓ Saved plant-level data: {plant_filename}")
             
             # Convert to parent company level
             proj_group = convert_plant2parent(
@@ -556,6 +569,12 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
             proj_feats[f"BU intensity ({method})"] = proj_feats[f"BU intensity ({method})"].replace(np.inf, np.nan)
             proj_feats = proj_feats.reset_index()
             
+            # Save company-aggregated data (one row per company per year with BU predictions)
+            company_agg_filename = f"nze_{elec_source_name.lower()}_elec_{method}_company_aggregated.csv"
+            company_agg_filepath = plant_data_dir / company_agg_filename
+            proj_feats.to_csv(company_agg_filepath, index=False)
+            typer.echo(f"      ✓ Saved company-aggregated data: {company_agg_filename}")
+            
             # Aggregate to sectoral level
             agg_cols = {
                 f"BU emissions ({method})": "sum",
@@ -577,6 +596,7 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
                 bu_sectoral_proj['Emissions_low (Gt)'] = bu_sectoral_proj[f"BU emissions_low ({method})"] / 1e9
                 bu_sectoral_proj['Emissions_high (Gt)'] = bu_sectoral_proj[f"BU emissions_high ({method})"] / 1e9
             
+            # TODO: debug from here
             bu_sectoral_proj['Raw Emissions (Gt)'] = bu_sectoral_proj["emissions"] / 1e9
             bu_sectoral_proj[f'UR ({method})'] = bu_sectoral_proj["production"] / bu_sectoral_proj["capacity"]
             bu_sectoral_proj[f"Intensity ({method})"] = bu_sectoral_proj[f"BU emissions ({method})"] / bu_sectoral_proj["production"]
@@ -995,6 +1015,12 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
                     proj_plants["Emissions (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF"] / 1E6
                     proj_plants = proj_plants.drop(columns=["EAF_CAGR"])
                 
+                # Save plant-level data before aggregation
+                plant_filename = f"{scenario_name.lower()}_{elec_source_name.lower()}_elec_{method}_plants.xlsx"
+                plant_filepath = plant_data_dir / plant_filename
+                proj_plants.to_excel(plant_filepath, index=False)
+                typer.echo(f"        ✓ Saved plant-level data: {plant_filename}")
+                
                 # Convert to parent company level
                 proj_group = convert_plant2parent(
                     proj_plants, 
@@ -1070,6 +1096,12 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
                 proj_feats[f"BU intensity ({method})"] = proj_feats[f"BU emissions ({method})"] / proj_feats["production"]
                 proj_feats[f"BU intensity ({method})"] = proj_feats[f"BU intensity ({method})"].replace(np.inf, np.nan)
                 proj_feats = proj_feats.reset_index()
+                
+                # Save company-aggregated data (one row per company per year with BU predictions)
+                company_agg_filename = f"{scenario_name.lower()}_{elec_source_name.lower()}_elec_{method}_company_aggregated.csv"
+                company_agg_filepath = plant_data_dir / company_agg_filename
+                proj_feats.to_csv(company_agg_filepath, index=False)
+                typer.echo(f"        ✓ Saved company-aggregated data: {company_agg_filename}")
                 
                 # Aggregate to sectoral level
                 agg_cols = {
@@ -1514,11 +1546,19 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
             # Create figure with 3 subplots (one per electricity intensity)
             fig_norm, axs_norm = plt.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
             
+            # Define scenario-specific y-axis bounds for normalized plots
+            ylim_bounds = {
+                "NZE": (0.8, 1.05),
+                "APS": (0.85, 1.05),
+                "STEPS": (0.85, 1.05)
+            }
+            ylim_min, ylim_max = ylim_bounds[scenario_name]
+            
             # For each electricity intensity
             for idx, elec_source_name in enumerate(["NZE", "APS", "STEPS"]):
                 ax = axs_norm[idx]
                 ax.set_xlim(2017, 2031)
-                ax.set_ylim(0.75, 1.05)
+                ax.set_ylim(ylim_min, ylim_max)
                 ax.set_box_aspect(1)
                 ax.grid("both", alpha=0.3)
                 ax.set_title(f"{elec_source_name} electricity", fontsize=12, weight='bold')
@@ -1698,7 +1738,7 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
     for idx, (elec_source_name, elec_int_data) in enumerate(elec_int_sources.items()):
         ax = axs_emis_norm[idx]
         ax.set_xlim(2017, 2031)
-        ax.set_ylim(0.75, 1.05)
+        ax.set_ylim(0.8, 1.05)  # NZE scenario normalized bounds
         ax.set_box_aspect(1)
         ax.grid("both")
         ax.set_title(f"NZE with {elec_source_name} electricity intensity", fontsize=12, weight='bold')
@@ -2054,7 +2094,7 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
     for idx, method in enumerate(methods_to_compare):
         ax = axs_methods_norm[idx]
         ax.set_xlim(2017, 2031)
-        ax.set_ylim(0.75, 1.05)
+        ax.set_ylim(0.8, 1.05)  # NZE scenario normalized bounds
         ax.set_box_aspect(1)
         ax.grid("both")
         ax.set_title(f"{method_labels[method]}", fontsize=12, weight='bold')
@@ -2404,10 +2444,28 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
     typer.echo(f"    Total rows: {len(combined_data)}")
     typer.echo(f"    Columns: {', '.join(column_order)}")
     
+    typer.echo(f"\n✓ Plant & Company-level data (in {plant_data_dir}):")
+    # Count files
+    plant_files = list(plant_data_dir.glob("*_plants.xlsx"))
+    company_agg_files = list(plant_data_dir.glob("*_company_aggregated.csv"))
+    total_files = len(plant_files) + len(company_agg_files)
+    
+    typer.echo(f"  - Plant-level files: {len(plant_files)}")
+    typer.echo(f"    Format: {{scenario}}_{{elec_intensity}}_elec_{{method}}_plants.xlsx")
+    typer.echo(f"    Expected: 18 (3 scenarios × 3 elec intensities × 2 methods)")
+    
+    typer.echo(f"  - Company-aggregated files (CSV): {len(company_agg_files)}")
+    typer.echo(f"    Format: {{scenario}}_{{elec_intensity}}_elec_{{method}}_company_aggregated.csv")
+    typer.echo(f"    Expected: 18 (one row per company per year with BU predictions)")
+    
+    typer.echo(f"  - Total data files: {total_files} (expected: 36)")
+    
     typer.echo("\n" + "="*70)
-    typer.echo("✓ All plots generated successfully!")
+    typer.echo("✓ All plots and data generated successfully!")
     typer.echo(f"✓ Total plot files: {3 + 12 + 1 + 1 + 1 + 1} = 19 plots")
     typer.echo(f"  (3 main + 12 method-specific + 5 supporting)")
+    typer.echo(f"✓ Total data files: {total_files}")
+    typer.echo(f"  ({len(plant_files)} plants + {len(company_agg_files)} company aggregated)")
     typer.echo("="*70)
     
     return data_elec_sensitivity
