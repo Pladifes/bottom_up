@@ -33,8 +33,11 @@ def correct_uncertainty_bounds(ef12_proj: pd.DataFrame, max_abat_path: Path) -> 
 def get_projected_efs(emissions_data_dir: Path, activity_data_dir: Path, sci_ef_path: Path):
     # Read huizhong emission factors (scope 1)
     efs = get_histo_efs(emissions_data_dir, activity_data_dir)
+    efs["bof_ohf_ef"] = efs["bof_ohf_ef"].replace(np.inf, np.nan)
+    # Drop values above 95% percentile
+    quantile_95 = efs["bof_ohf_ef"].quantile(0.95)
     # Extrapolate trend based on most recent years
-    efs = efs.loc[efs["year"].between(2000, 2020)]
+    efs = efs.loc[efs["year"].between(2000, 2020) & (efs["bof_ohf_ef"] < quantile_95)]
     sci_ef = pd.read_excel(sci_ef_path, engine="calamine").rename(columns={"Country":"country"})
     ef19_merge = get_efs_19(efs, sci_ef)
     

@@ -418,65 +418,28 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
                 regions_fpath=regions_fpath,
                 gspt2iea_countries_path=gspt2iea_countries_path
             )
-            
-            # Apply EAF decarbonization if enabled
-            if params.EAF_decarb:
-                # TODO: get regional slopes for APS and STEPS
-                # Use scenario-specific electricity intensity targets for 2030
-                base_all = 460  # 2022 global electricity intensity (g CO2/kWh)
-                # 2030 targets from IEA WEO (g CO2/kWh)
-                end_values = {
-                    "NZE": 186,    # Net Zero Emissions
-                    "APS": 255,    # Announced Pledges Scenario
-                    "STEPS": 303   # Stated Policies Scenario
-                }
-                end_value = end_values[elec_source_name]
-                
-                typer.echo(f"    EAF decarb: {base_all} -> {end_value} g CO2/kWh (CAGR will vary by scenario)")
-                
-                # Calculate CAGR for this specific scenario
-                caagr = get_cagr(base_value=base_all, end_value=end_value, n=8)
-                years = list(range(2023, 2031))
-                elec_cagr_df = pd.DataFrame({
-                    "year": years,
-                    "EAF_CAGR": [(1+caagr)**(i+1) for i in range(len(years))],
-                })
-                
-                # Drop existing CAGR column if it exists (from get_proj_elec_int for regional scenarios)
-                if "CAGR" in proj_plants.columns:
-                    proj_plants = proj_plants.drop(columns=["CAGR"])
-                
-                # Merge the EAF-specific CAGR
-                proj_plants = pd.merge(proj_plants, elec_cagr_df, on="year", how='left')
-                
-                # Apply CAGR only to electric arc furnace (EAF) plants
-                proj_plants["EAF_CAGR"] = (proj_plants["Main production process"] == "electric") * proj_plants["EAF_CAGR"]
-                proj_plants["EAF_CAGR"] = proj_plants["EAF_CAGR"].replace(0, 1)
-                
-                # Adjust emission factors
-                proj_plants["EF"] = proj_plants["EF"] * proj_plants["EAF_CAGR"]
-                
-                # Apply CAGR to uncertainty bounds if they exist
-                if "EF_12_lower" in proj_plants.columns:
-                    # TODO: get regional slopes for APS and STEPS
-                    # TODO: EF_12_lower = EF_12_upper = EF_histo, which is a bug?
-                    proj_plants["EF_12_lower"] = proj_plants["EF_12_lower"] * proj_plants["EAF_CAGR"]
-                    # TODO: EF_12_upper should be EF_histo which is the case by default
-                    # proj_plants["EF_12_upper"] = proj_plants["EF_12_upper"] * proj_plants["EAF_CAGR"]
-                    # Update emissions bounds with adjusted EF
-                    proj_plants["Emissions_low (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_lower"] / 1E6
-                    proj_plants["Emissions_high (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_upper"] / 1E6
-                
-                # Update emissions with adjusted EF
-                proj_plants["Emissions (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF"] / 1E6
-                
-                # Clean up temporary column
-                proj_plants = proj_plants.drop(columns=["EAF_CAGR"])
+            # Take scenario-specific electricity intensity slope
+            # and apply it to the EAF emission factor
+            # Apply CAGR only to electric arc furnace (EAF) plant
+            proj_plants["EAF_CAGR"] = (proj_plants["Main production process"] == "electric") * proj_plants["elec_caagr_pow"]
+            proj_plants["EAF_CAGR"] = proj_plants["EAF_CAGR"].replace(0, 1)
+            proj_plants["EF"] = proj_plants["EF"] * proj_plants["EAF_CAGR"]
+            # Update uncertainty bounds for EAF emission factors
+            # That is, EAF content for upper and lower bounds
+            # decreases with the electricity intensity slope
+            proj_plants["EF_12_lower"] = proj_plants["EF_12_lower"] * proj_plants["EAF_CAGR"]
+            proj_plants["EF_12_upper"] = proj_plants["EF_12_upper"] * proj_plants["EAF_CAGR"]
+            proj_plants["Emissions (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF"] / 1E6
+            proj_plants["Emissions_low (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_lower"] / 1E6
+            proj_plants["Emissions_high (Gt)"] = proj_plants["Estimated crude steel production (ttpa)"] * proj_plants["EF_12_upper"] / 1E6
+
+            # Clean up temporary column
+            # proj_plants = proj_plants.drop(columns=["EAF_CAGR"])
             
             # Save plant-level data before aggregation
-            plant_filename = f"nze_{elec_source_name.lower()}_elec_{method}_plants.xlsx"
+            plant_filename = f"nze_{elec_source_name.lower()}_elec_{method}_plants.csv"
             plant_filepath = plant_data_dir / plant_filename
-            proj_plants.to_excel(plant_filepath, index=False)
+            proj_plants.to_csv(plant_filepath, index=False)
             typer.echo(f"      ✓ Saved plant-level data: {plant_filename}")
             
             # Convert to parent company level
@@ -1549,8 +1512,8 @@ def main(config_path: Path = typer.Argument(Path("./config.toml"), help="Path to
             # Define scenario-specific y-axis bounds for normalized plots
             ylim_bounds = {
                 "NZE": (0.8, 1.05),
-                "APS": (0.85, 1.05),
-                "STEPS": (0.85, 1.05)
+                "APS": (0.9, 1.05),
+                "STEPS": (0.9, 1.05)
             }
             ylim_min, ylim_max = ylim_bounds[scenario_name]
             

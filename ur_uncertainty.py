@@ -751,7 +751,7 @@ def main(config_path: Path = typer.Argument(
             ax.plot(
                 data_constant['year'],
                 data_constant['Normalized Emissions'],
-                label='Constant UR' if idx == 0 else None,
+                label='Projected BU (country & technology UR)' if idx == 0 else None,
                 color=color_constant,
                 linewidth=2.5,
                 linestyle='--'
@@ -761,7 +761,7 @@ def main(config_path: Path = typer.Argument(
             ax.plot(
                 data_company['year'],
                 data_company['Normalized Emissions'],
-                label='Company UR' if idx == 0 else None,
+                label='Projected BU (constant market share)' if idx == 0 else None,
                 color=color_company,
                 linewidth=2.5,
                 linestyle='-.'
@@ -804,8 +804,8 @@ def main(config_path: Path = typer.Argument(
         # Define desired order: Historical -> Methods -> Scenarios -> Uncertainty
         desired_order = [
             'Historical BU',
-            'Constant UR',
-            'Company UR',
+            'Projected BU (country & technology UR)',
+            'Projected BU (constant market share)',
             'IEA NZE',
             'IEA APS',
             'IEA STEPS',
